@@ -111,7 +111,6 @@ fn main() -> Result<(), io::Error> {
     let newline = matches.remove_one::<String>("newline").unwrap();
     let prefix = matches.remove_one::<String>("prefix").unwrap();
     let suffix = matches.remove_one::<String>("suffix").unwrap();
-    println!("Args: {source:?}, Duration: {duration:?}");
     RunningText::new(
         source,
         duration,

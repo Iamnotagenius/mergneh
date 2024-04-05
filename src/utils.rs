@@ -1,6 +1,10 @@
 use std::iter::repeat;
 
 pub fn replace_newline(text: &mut String, replacement: &str) {
+    if replacement.is_empty() {
+        text.retain(|c| c != '\n');
+        return;
+    }
     let newline_count = text.chars().filter(|&c| c == '\n').count();
     let additional_len = (replacement.len() - 1) * newline_count;
     text.reserve(additional_len);

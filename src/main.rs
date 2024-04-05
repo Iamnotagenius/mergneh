@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use clap::{arg, command, ArgGroup, ArgMatches, Id};
+use clap::{arg, command, crate_authors, crate_description, crate_name, ArgGroup, ArgMatches, Id};
 
 use crate::running_text::RunningText;
 
@@ -75,11 +75,12 @@ impl TryFrom<&mut ArgMatches> for TextSource {
 }
 
 fn main() -> Result<(), io::Error> {
-    let mut matches = command!()
-        .arg(arg!(<SOURCE> "File/string source"))
-        .arg(arg!(-f --file <FILE> "File source"))
-        .arg(arg!(-S --string <STRING> "String source"))
-        .arg(arg!(--stdin "Read text from stdin"))
+    let mut matches = command!(crate_name!())
+        .about(crate_description!())
+        .arg(arg!(<SOURCE> "same as --file, if file with this name does not exist or is a directory, it will behave as --string"))
+        .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))
+        .arg(arg!(-S --string <STRING> "Use a string as contents"))
+        .arg(arg!(--stdin "Pull contents from stdin (BEWARE: it loads whole input into memory just like --file)"))
         .group(
             ArgGroup::new("sources")
                 .required(true)
@@ -88,7 +89,7 @@ fn main() -> Result<(), io::Error> {
         .arg(arg!(-d --duration <DURATION> "Tick duration").default_value("1s"))
         .arg(arg!(-w --window <WINDOW> "Window size").default_value("6"))
         .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
-        .arg(arg!(-n --newline <NL> "String to replace newline").default_value(""))
+        .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
         .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
         .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
         .get_matches();

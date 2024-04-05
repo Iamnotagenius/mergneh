@@ -65,25 +65,30 @@ impl<'a> Iterator for RunningTextIter<'a> {
     type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.i > self.char_count - self.src.window_size {
-            self.text = self.src.source[self.byte_offset..]
-                .chars()
-                // TODO: Separator
-                .chain(
-                    self.src
-                        .source
-                        .chars()
-                        .take(self.src.window_size - (self.char_count - self.i)),
-                )
-                .map(replace_newline)
-                .collect();
-        } else {
-            self.text = self.src.source[self.byte_offset..]
+        self.text = String::new();
+        // 0123
+        // 01230123012301
+        // 12301230123012
+        self.text.extend(
+            self.src.source[self.byte_offset..]
                 .chars()
                 .take(self.src.window_size)
-                .map(replace_newline) // TODO: some special case, should be handled more gracefully
-                .collect();
+                // TODO: Separator
+                .map(replace_newline),
+        );
+
+        let mut remainder = self
+            .src
+            .window_size
+            .saturating_sub(self.char_count - self.i);
+        while remainder >= self.char_count {
+            self.text
+                .extend(self.src.source.chars().map(replace_newline)); // TODO: some special case, should be handled more gracefully
+
+            remainder -= self.char_count;
         }
+        self.text
+            .extend(self.src.source.chars().take(remainder).map(replace_newline));
         self.i += 1;
         self.i %= self.char_count;
         self.byte_offset = (self.byte_offset + 1..self.src.source.len())

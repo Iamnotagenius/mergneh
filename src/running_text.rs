@@ -5,10 +5,12 @@ use std::{
 
 use ticker::Ticker;
 
-use crate::TextSource;
+use crate::{utils::replace_newline, TextSource};
 
 pub struct RunningText {
-    source: String,
+    content: String,
+    prefix: String,
+    suffix: String,
     duration: Duration,
     window_size: usize,
 }
@@ -26,19 +28,26 @@ impl RunningText {
         source: TextSource,
         duration: Duration,
         window_size: usize,
+        separator: String,
+        newline: String,
+        prefix: String,
+        suffix: String,
     ) -> Result<Self, io::Error> {
-        let str = source.try_into()?;
+        let mut content = source.try_into()?;
+        content += separator.as_str();
+        replace_newline(&mut content, newline.as_str());
         Ok(RunningText {
-            source: str,
+            content,
+            prefix,
+            suffix,
             duration,
             window_size,
         })
     }
     pub fn run_on_console(self) -> Result<(), io::Error> {
         let tick = Ticker::new(self.into_iter(), self.duration);
-        println!("Source: {}", self.source);
-        for w in tick {
-            print!("\r{}", w);
+        for text in tick {
+            print!("\r{}{}{}", self.prefix, text, self.suffix);
             io::stdout().flush()?;
         }
         return Ok(());
@@ -53,10 +62,10 @@ impl<'a> IntoIterator for &'a RunningText {
     fn into_iter(self) -> Self::IntoIter {
         RunningTextIter {
             src: self,
-            text: self.source.chars().take(self.window_size).collect(),
+            text: self.content.chars().take(self.window_size).collect(),
             i: 0usize,
             byte_offset: 0usize,
-            char_count: self.source.chars().count(),
+            char_count: self.content.chars().count(),
         }
     }
 }
@@ -66,15 +75,10 @@ impl<'a> Iterator for RunningTextIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.text = String::new();
-        // 0123
-        // 01230123012301
-        // 12301230123012
         self.text.extend(
-            self.src.source[self.byte_offset..]
+            self.src.content[self.byte_offset..]
                 .chars()
-                .take(self.src.window_size)
-                // TODO: Separator
-                .map(replace_newline),
+                .take(self.src.window_size),
         );
 
         let mut remainder = self
@@ -82,26 +86,18 @@ impl<'a> Iterator for RunningTextIter<'a> {
             .window_size
             .saturating_sub(self.char_count - self.i);
         while remainder >= self.char_count {
-            self.text
-                .extend(self.src.source.chars().map(replace_newline)); // TODO: some special case, should be handled more gracefully
+            self.text.extend(self.src.content.chars()); // TODO: some special case, should be handled more gracefully
 
             remainder -= self.char_count;
         }
-        self.text
-            .extend(self.src.source.chars().take(remainder).map(replace_newline));
+        self.text.extend(self.src.content.chars().take(remainder));
         self.i += 1;
         self.i %= self.char_count;
-        self.byte_offset = (self.byte_offset + 1..self.src.source.len())
-            .skip_while(|&i| !self.src.source.is_char_boundary(i))
+        self.byte_offset = (self.byte_offset + 1..self.src.content.len())
+            .skip_while(|&i| !self.src.content.is_char_boundary(i))
             .take(1)
             .next()
             .unwrap_or(0);
         Some(self.text.clone())
-    }
-}
-fn replace_newline(c: char) -> char {
-    match c {
-        '\n' => '',
-        _ => c,
     }
 }

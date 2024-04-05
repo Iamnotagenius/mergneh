@@ -1,4 +1,5 @@
 mod running_text;
+mod utils;
 
 use std::{
     convert::Infallible,
@@ -62,11 +63,11 @@ impl TryFrom<&mut ArgMatches> for TextSource {
 
     fn try_from(value: &mut ArgMatches) -> Result<Self, Self::Error> {
         let kind = value.remove_one::<Id>("sources").unwrap();
-        let src = value.remove_one::<String>(kind.as_str()).unwrap();
+        let src = value.try_remove_one::<String>(kind.as_str());
         return Ok(match kind.as_str() {
-            "SOURCE" => TextSource::from_str(&src).unwrap(),
-            "file" => TextSource::File(Arc::new(File::open(src)?)),
-            "string" => TextSource::String(src),
+            "SOURCE" => TextSource::from_str(&src.unwrap().unwrap()).unwrap(),
+            "file" => TextSource::File(Arc::new(File::open(src.unwrap().unwrap())?)),
+            "string" => TextSource::String(src.unwrap().unwrap()),
             "stdin" => TextSource::Stdin,
             _ => unreachable!(),
         });
@@ -77,15 +78,19 @@ fn main() -> Result<(), io::Error> {
     let mut matches = command!()
         .arg(arg!(<SOURCE> "File/string source"))
         .arg(arg!(-f --file <FILE> "File source"))
-        .arg(arg!(-s --string <STRING> "String source"))
+        .arg(arg!(-S --string <STRING> "String source"))
         .arg(arg!(--stdin "Read text from stdin"))
         .group(
             ArgGroup::new("sources")
                 .required(true)
                 .args(["SOURCE", "file", "string", "stdin"]),
         )
-        .arg(arg!(-d --duration <DURATION> "Tick duration"))
-        .arg(arg!(-w --window <WINDOW> "Window size"))
+        .arg(arg!(-d --duration <DURATION> "Tick duration").default_value("1s"))
+        .arg(arg!(-w --window <WINDOW> "Window size").default_value("6"))
+        .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
+        .arg(arg!(-n --newline <NL> "String to replace newline").default_value(""))
+        .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
+        .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
         .get_matches();
 
     let source = TextSource::try_from(&mut matches)?;
@@ -96,12 +101,25 @@ fn main() -> Result<(), io::Error> {
                 .expect("Duration parse error")
                 .into()
         })
-        .unwrap_or(Duration::from_secs(1));
+        .unwrap();
     let window_size = matches
-        .get_one::<String>("window")
+        .remove_one::<String>("window")
         .map(|s| s.parse::<usize>().expect("Window size must be a number"))
-        .unwrap_or(3);
+        .unwrap();
+    let separator = matches.remove_one::<String>("separator").unwrap();
+    let newline = matches.remove_one::<String>("newline").unwrap();
+    let prefix = matches.remove_one::<String>("prefix").unwrap();
+    let suffix = matches.remove_one::<String>("suffix").unwrap();
     println!("Args: {source:?}, Duration: {duration:?}");
-    RunningText::new(source, duration, window_size)?.run_on_console()?;
+    RunningText::new(
+        source,
+        duration,
+        window_size,
+        separator,
+        newline,
+        prefix,
+        suffix,
+    )?
+    .run_on_console()?;
     Ok(())
 }

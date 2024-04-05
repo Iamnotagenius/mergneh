@@ -15,7 +15,7 @@ pub fn replace_newline(text: &mut String, replacement: &str) {
 
     unsafe {
         let buffer = text.as_bytes_mut();
-        while dest > src {
+        while src >= 1 {
             src -= 1;
             let byte = buffer[src];
             if byte == b'\n' {

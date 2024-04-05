@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use clap::{arg, command, crate_authors, crate_description, crate_name, ArgGroup, ArgMatches, Id};
+use clap::{arg, command, crate_description, crate_name, ArgGroup, ArgMatches, Id};
 
 use crate::running_text::RunningText;
 

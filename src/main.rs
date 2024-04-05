@@ -1,8 +1,9 @@
+mod running_text;
+
 use std::{
     convert::Infallible,
     fs::File,
-    io::{self, Read, Write},
-    os::fd::AsFd,
+    io::{self, Read},
     path::Path,
     str::FromStr,
     sync::Arc,
@@ -10,18 +11,15 @@ use std::{
 };
 
 use clap::{arg, command, ArgGroup, ArgMatches, Id};
-use ticker::Ticker;
 
-struct RunningText {
-    source: String,
-    duration: Duration,
-    window_size: usize,
-}
+use crate::running_text::RunningText;
 
-#[derive(Debug, Clone)]
-enum TextSource {
-    String(Arc<str>),
+#[derive(Debug, Default, Clone)]
+pub enum TextSource {
+    String(String),
     File(Arc<File>),
+    #[default]
+    Stdin,
 }
 
 impl FromStr for TextSource {
@@ -30,69 +28,48 @@ impl FromStr for TextSource {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let path = Path::new(s);
         if path.is_dir() {
-            return Ok(TextSource::String(Arc::from(s)));
+            return Ok(TextSource::String(s.to_owned()));
         }
         return Ok(match File::open(path) {
             Ok(file) => TextSource::File(Arc::new(file)),
-            Err(_) => TextSource::String(Arc::from(s)),
+            Err(_) => TextSource::String(s.to_owned()),
         });
     }
 }
 
-impl TextSource {
-    fn to_string(self) -> Result<String, io::Error> {
+impl TryInto<String> for TextSource {
+    type Error = io::Error;
+
+    fn try_into(self) -> Result<String, Self::Error> {
         Ok(match self {
             TextSource::String(s) => s.to_string(),
             TextSource::File(mut f) => {
                 let mut s = String::new();
-                f.read_to_string(&mut s);
+                f.read_to_string(&mut s)?;
+                s
+            }
+            TextSource::Stdin => {
+                let mut s = String::new();
+                io::stdin().read_to_string(&mut s)?;
                 s
             }
         })
     }
 }
 
-impl TryFrom<&ArgMatches> for TextSource {
+impl TryFrom<&mut ArgMatches> for TextSource {
     type Error = io::Error;
 
-    fn try_from(value: &ArgMatches) -> Result<Self, Self::Error> {
-        let kind = value.get_one::<Id>("sources").unwrap().as_str();
-        let src = value.get_one::<String>(kind).unwrap();
-        return Ok(match kind {
-            "SOURCE" => TextSource::from_str(src).unwrap(),
+    fn try_from(value: &mut ArgMatches) -> Result<Self, Self::Error> {
+        let kind = value.remove_one::<Id>("sources").unwrap();
+        let src = value.remove_one::<String>(kind.as_str()).unwrap();
+        return Ok(match kind.as_str() {
+            "SOURCE" => TextSource::from_str(&src).unwrap(),
             "file" => TextSource::File(Arc::new(File::open(src)?)),
-            "string" => TextSource::String(Arc::from(src.as_str())),
+            "string" => TextSource::String(src),
+            "stdin" => TextSource::Stdin,
             _ => unreachable!(),
         });
-    }
-}
-
-impl TextSource {
-    fn len(&self) -> usize {
-        match self {
-            TextSource::String(s) => s.len(),
-            TextSource::File(f) => f.metadata().unwrap().len() as usize,
-        }
-    }
-}
-
-impl RunningText {
-    fn new(source: TextSource, duration: Duration, window_size: usize) -> Result<Self, io::Error> {
-        Ok(RunningText {
-            source: source.to_string()?,
-            duration,
-            window_size,
-        })
-    }
-    fn run_on_console(self) -> Result<(), io::Error> {
-        let tick = Ticker::new(0..self.source.len() - self.window_size + 1, self.duration);
-        println!("Source: {}", self.source);
-        print!("\r{}", &self.source[0..self.window_size]);
-        for t in tick {
-            print!("\r{}", &self.source[t..t + self.window_size]);
-            io::stdout().flush()?;
-        }
-        return Ok(());
     }
 }
 
@@ -101,16 +78,17 @@ fn main() -> Result<(), io::Error> {
         .arg(arg!(<SOURCE> "File/string source"))
         .arg(arg!(-f --file <FILE> "File source"))
         .arg(arg!(-s --string <STRING> "String source"))
+        .arg(arg!(--stdin "Read text from stdin"))
         .group(
             ArgGroup::new("sources")
                 .required(true)
-                .args(["SOURCE", "file", "string"]),
+                .args(["SOURCE", "file", "string", "stdin"]),
         )
         .arg(arg!(-d --duration <DURATION> "Tick duration"))
         .arg(arg!(-w --window <WINDOW> "Window size"))
         .get_matches();
 
-    let source = TextSource::try_from(&matches)?;
+    let source = TextSource::try_from(&mut matches)?;
     let duration: Duration = matches
         .remove_one::<String>("duration")
         .map(|s| {

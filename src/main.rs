@@ -117,6 +117,7 @@ fn text_from_matches(mut matches: ArgMatches) -> Result<RunningText, io::Error> 
 fn main() -> Result<(), io::Error> {
     let (cmd, mut matches) = command!(crate_name!())
         .about(crate_description!())
+        .subcommand_required(true)
         .subcommand(
             command_with_text_args("run")
                 .arg(arg!(-d --duration <DURATION> "Tick duration").default_value("1s"))

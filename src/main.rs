@@ -13,7 +13,7 @@ use std::{
 };
 
 use clap::{
-    arg, builder::Str, command, crate_description, crate_name, ArgGroup, ArgMatches, Command, Id,
+    arg, command, crate_description, crate_name, ArgAction, ArgGroup, ArgMatches, Command, Id,
 };
 
 use crate::running_text::RunningText;
@@ -77,27 +77,18 @@ impl TryFrom<&mut ArgMatches> for TextSource {
     }
 }
 
-fn command_with_text_args(name: impl Into<Str>) -> Command {
-    Command::new(name)
-}
-
 fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error> {
-    let source = TextSource::try_from(&mut *matches)?;
-    let window_size = matches
-        .remove_one::<String>("window")
-        .map(|s| s.parse::<usize>().expect("Window size must be a number"))
-        .unwrap();
-    let separator = matches.remove_one::<String>("separator").unwrap();
-    let newline = matches.remove_one::<String>("newline").unwrap();
-    let prefix = matches.remove_one::<String>("prefix").unwrap();
-    let suffix = matches.remove_one::<String>("suffix").unwrap();
     Ok(RunningText::new(
-        source,
-        window_size,
-        separator,
-        newline,
-        prefix,
-        suffix,
+        TextSource::try_from(&mut *matches)?,
+        matches
+            .remove_one::<String>("window")
+            .map(|s| s.parse::<usize>().expect("Window size must be a number"))
+            .unwrap(),
+        matches.remove_one::<String>("separator").unwrap(),
+        matches.remove_one::<String>("newline").unwrap(),
+        matches.remove_one::<String>("prefix").unwrap(),
+        matches.remove_one::<String>("suffix").unwrap(),
+        matches.remove_one::<bool>("dont-repeat").unwrap(),
     )?)
 }
 
@@ -118,15 +109,16 @@ fn main() -> Result<(), io::Error> {
         .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
         .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
         .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
+        .arg(arg!(-'1' --"dont-repeat" "Do not repeat contents if it fits in the window size").action(ArgAction::SetFalse))
         .subcommand_required(true)
         .subcommand(
-            command_with_text_args("run")
+            Command::new("run")
                 .arg(arg!(-d --duration <DURATION> "Tick duration").default_value("1s"))
                 .about("Run text in a terminal")
                 .arg_required_else_help(true),
         )
         .subcommand(
-            command_with_text_args("iter")
+            Command::new("iter")
                 .arg(arg!(<ITER_FILE> "File containing data for next iteration"))
                 .about("Print just one iteration"),
         )

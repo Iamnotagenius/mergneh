@@ -11,7 +11,6 @@ pub struct RunningText {
     content: String,
     prefix: String,
     suffix: String,
-    duration: Duration,
     window_size: usize,
 }
 
@@ -26,7 +25,6 @@ pub struct RunningTextIter<'a> {
 impl RunningText {
     pub fn new(
         source: TextSource,
-        duration: Duration,
         window_size: usize,
         separator: String,
         newline: String,
@@ -40,12 +38,11 @@ impl RunningText {
             content,
             prefix,
             suffix,
-            duration,
             window_size,
         })
     }
-    pub fn run_on_console(self) -> Result<(), io::Error> {
-        let tick = Ticker::new(self.into_iter(), self.duration);
+    pub fn run_on_terminal(self, duration: Duration) -> Result<(), io::Error> {
+        let tick = Ticker::new(self.into_iter(), duration);
         for text in tick {
             print!("\r{}{}{}", self.prefix, text, self.suffix);
             io::stdout().flush()?;

@@ -41,6 +41,9 @@ impl RunningText {
             window_size,
         })
     }
+    pub fn get_raw_content(&self) -> &str {
+        &self.content
+    }
     pub fn run_on_terminal(self, duration: Duration) -> Result<(), io::Error> {
         let tick = Ticker::new(self.into_iter(), duration);
         for text in tick {
@@ -48,6 +51,21 @@ impl RunningText {
             io::stdout().flush()?;
         }
         return Ok(());
+    }
+    pub fn print_once(&self, mut i: usize, prev_content: &str) -> usize {
+        if prev_content != self.content {
+            i = 0;
+        }
+        let count = self.content.chars().count();
+        let mut iter = RunningTextIter {
+            src: self,
+            text: String::new(),
+            char_count: count,
+            i,
+            byte_offset: self.content.char_indices().nth(i % count).unwrap().0,
+        };
+        println!("{}{}{}", self.prefix, iter.next().unwrap(), self.suffix);
+        return iter.i;
     }
 }
 

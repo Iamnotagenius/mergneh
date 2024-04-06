@@ -3,7 +3,8 @@ mod utils;
 
 use std::{
     convert::Infallible,
-    fs::File,
+    env,
+    fs::{self, File},
     io::{self, Read},
     path::Path,
     str::FromStr,
@@ -78,24 +79,10 @@ impl TryFrom<&mut ArgMatches> for TextSource {
 
 fn command_with_text_args(name: impl Into<Str>) -> Command {
     Command::new(name)
-            .arg(arg!(<SOURCE> "same as --file, if file with this name does not exist or is a directory, it will behave as --string"))
-            .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))
-            .arg(arg!(-S --string <STRING> "Use a string as contents"))
-            .arg(arg!(--stdin "Pull contents from stdin (BEWARE: it loads whole input into memory just like --file)"))
-            .group(
-                ArgGroup::new("sources")
-                .required(true)
-                .args(["SOURCE", "file", "string", "stdin"]),
-                )
-            .arg(arg!(-w --window <WINDOW> "Window size").default_value("6"))
-            .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
-            .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
-            .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
-            .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
 }
 
-fn text_from_matches(mut matches: ArgMatches) -> Result<RunningText, io::Error> {
-    let source = TextSource::try_from(&mut matches)?;
+fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error> {
+    let source = TextSource::try_from(&mut *matches)?;
     let window_size = matches
         .remove_one::<String>("window")
         .map(|s| s.parse::<usize>().expect("Window size must be a number"))
@@ -115,8 +102,22 @@ fn text_from_matches(mut matches: ArgMatches) -> Result<RunningText, io::Error> 
 }
 
 fn main() -> Result<(), io::Error> {
-    let (cmd, mut matches) = command!(crate_name!())
+    let mut matches = command!(crate_name!())
         .about(crate_description!())
+        .arg(arg!(<SOURCE> "same as --file, if file with this name does not exist or is a directory, it will behave as --string"))
+        .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))
+        .arg(arg!(-S --string <STRING> "Use a string as contents"))
+        .arg(arg!(--stdin "Pull contents from stdin (BEWARE: it loads whole input into memory just like --file)"))
+        .group(
+            ArgGroup::new("sources")
+            .required(true)
+            .args(["SOURCE", "file", "string", "stdin"]),
+            )
+        .arg(arg!(-w --window <WINDOW> "Window size").default_value("6"))
+        .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
+        .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
+        .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
+        .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
         .subcommand_required(true)
         .subcommand(
             command_with_text_args("run")
@@ -124,12 +125,17 @@ fn main() -> Result<(), io::Error> {
                 .about("Run text in a terminal")
                 .arg_required_else_help(true),
         )
-        .get_matches()
-        .remove_subcommand()
-        .unwrap();
+        .subcommand(
+            command_with_text_args("iter")
+                .arg(arg!(<ITER_FILE> "File containing data for next iteration"))
+                .about("Print just one iteration"),
+        )
+        .get_matches();
+    let text = text_from_matches(&mut matches)?;
+    let (cmd, mut sub_matches) = matches.remove_subcommand().unwrap();
     match cmd.as_str() {
         "run" => {
-            let duration: Duration = matches
+            let duration: Duration = sub_matches
                 .remove_one::<String>("duration")
                 .map(|s| {
                     s.parse::<humantime::Duration>()
@@ -137,9 +143,30 @@ fn main() -> Result<(), io::Error> {
                         .into()
                 })
                 .unwrap();
-            text_from_matches(matches)?.run_on_terminal(duration)?;
+            text.run_on_terminal(duration)?;
+        }
+        "iter" => {
+            let iter_file = sub_matches.remove_one::<String>("ITER_FILE").unwrap();
+            let (i, prev_content) = match fs::read_to_string(&iter_file) {
+                Ok(s) => match s.split_once(char::is_whitespace) {
+                    Some((number, content)) => (
+                        number
+                            .parse::<usize>()
+                            .expect("First word in iter file should be a number"),
+                        content.to_owned(),
+                    ),
+                    _ => panic!("Wrong iter file format, it should be '<i> <prev_content>"),
+                },
+                Err(e) => match e.kind() {
+                    io::ErrorKind::NotFound => (0, String::new()),
+                    _ => return Err(e),
+                },
+            };
+            let i = text.print_once(i, prev_content.as_str());
+            fs::write(iter_file, format!("{i} {}", text.get_raw_content()))?;
         }
         _ => unreachable!(),
     }
+
     Ok(())
 }

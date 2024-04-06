@@ -1,6 +1,7 @@
 use std::iter::repeat;
 
 pub fn replace_newline(text: &mut String, replacement: &str) {
+    text.retain(|c| c != '\r');
     if replacement.is_empty() {
         text.retain(|c| c != '\n');
         return;

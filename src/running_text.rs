@@ -59,7 +59,7 @@ impl<'a> IntoIterator for &'a RunningText {
     fn into_iter(self) -> Self::IntoIter {
         RunningTextIter {
             src: self,
-            text: self.content.chars().take(self.window_size).collect(),
+            text: String::new(),
             i: 0usize,
             byte_offset: 0usize,
             char_count: self.content.chars().count(),
@@ -71,7 +71,7 @@ impl<'a> Iterator for RunningTextIter<'a> {
     type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.text = String::new();
+        self.text.clear();
         self.text.extend(
             self.src.content[self.byte_offset..]
                 .chars()

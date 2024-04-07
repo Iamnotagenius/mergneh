@@ -1,84 +1,25 @@
 mod running_text;
 mod utils;
+#[cfg(feature = "mpd")]
+mod mpd;
+mod text_source;
 
 use std::{
-    convert::Infallible,
-    env,
-    fs::{self, File},
-    io::{self, Read},
-    path::Path,
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
+    fs::{self},
+    io::{self},
+    path::PathBuf,
+    time::Duration, net::SocketAddr,
 };
 
 use clap::{
-    arg, command, crate_description, crate_name, ArgAction, ArgGroup, ArgMatches, Command, Id,
+    arg, command, crate_description, crate_name, ArgAction, ArgGroup, ArgMatches, Command, value_parser,
 };
+use text_source::TextSource;
 
 use crate::running_text::RunningText;
 
-#[derive(Debug, Default, Clone)]
-pub enum TextSource {
-    String(String),
-    File(Arc<File>),
-    #[default]
-    Stdin,
-}
-
-impl FromStr for TextSource {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let path = Path::new(s);
-        if path.is_dir() {
-            return Ok(TextSource::String(s.to_owned()));
-        }
-        return Ok(match File::open(path) {
-            Ok(file) => TextSource::File(Arc::new(file)),
-            Err(_) => TextSource::String(s.to_owned()),
-        });
-    }
-}
-
-impl TryInto<String> for TextSource {
-    type Error = io::Error;
-
-    fn try_into(self) -> Result<String, Self::Error> {
-        Ok(match self {
-            TextSource::String(s) => s.to_string(),
-            TextSource::File(mut f) => {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                s
-            }
-            TextSource::Stdin => {
-                let mut s = String::new();
-                io::stdin().read_to_string(&mut s)?;
-                s
-            }
-        })
-    }
-}
-
-impl TryFrom<&mut ArgMatches> for TextSource {
-    type Error = io::Error;
-
-    fn try_from(value: &mut ArgMatches) -> Result<Self, Self::Error> {
-        let kind = value.remove_one::<Id>("sources").unwrap();
-        let src = value.try_remove_one::<String>(kind.as_str());
-        return Ok(match kind.as_str() {
-            "SOURCE" => TextSource::from_str(&src.unwrap().unwrap()).unwrap(),
-            "file" => TextSource::File(Arc::new(File::open(src.unwrap().unwrap())?)),
-            "string" => TextSource::String(src.unwrap().unwrap()),
-            "stdin" => TextSource::Stdin,
-            _ => unreachable!(),
-        });
-    }
-}
-
 fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error> {
-    Ok(RunningText::new(
+    RunningText::new(
         TextSource::try_from(&mut *matches)?,
         matches
             .remove_one::<String>("window")
@@ -89,13 +30,20 @@ fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error>
         matches.remove_one::<String>("prefix").unwrap(),
         matches.remove_one::<String>("suffix").unwrap(),
         matches.remove_one::<bool>("dont-repeat").unwrap(),
-    )?)
+    )
 }
 
 fn main() -> Result<(), io::Error> {
-    let mut matches = command!(crate_name!())
+    let mut cli = command!(crate_name!())
         .about(crate_description!())
-        .arg(arg!(<SOURCE> "same as --file, if file with this name does not exist or is a directory, it will behave as --string"))
+        .arg(arg!(-w --window <WINDOW> "Window size").default_value("6"))
+        .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
+        .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
+        .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
+        .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
+        .arg(arg!(-'1' --"dont-repeat" "Do not repeat contents if it fits in the window size").action(ArgAction::SetFalse))
+        .next_help_heading("Sources")
+        .arg(arg!(<SOURCE> "    Same as --file, if file with this name does not exist or is a directory, it will behave as --string"))
         .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))
         .arg(arg!(-S --string <STRING> "Use a string as contents"))
         .arg(arg!(--stdin "Pull contents from stdin (BEWARE: it loads whole input into memory just like --file)"))
@@ -104,26 +52,44 @@ fn main() -> Result<(), io::Error> {
             .required(true)
             .args(["SOURCE", "file", "string", "stdin"]),
             )
-        .arg(arg!(-w --window <WINDOW> "Window size").default_value("6"))
-        .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
-        .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
-        .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
-        .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
-        .arg(arg!(-'1' --"dont-repeat" "Do not repeat contents if it fits in the window size").action(ArgAction::SetFalse))
         .subcommand_required(true)
         .subcommand(
             Command::new("run")
                 .arg(arg!(-d --duration <DURATION> "Tick duration").default_value("1s"))
                 .about("Run text in a terminal")
-                .arg_required_else_help(true),
         )
         .subcommand(
             Command::new("iter")
-                .arg(arg!(<ITER_FILE> "File containing data for next iteration"))
-                .about("Print just one iteration"),
+                .arg(arg!(<ITER_FILE> "File containing data for next iteration").value_parser(clap::value_parser!(PathBuf)))
+                .about("Print just one iteration")
+                .arg_required_else_help(true),
+        );
+    #[cfg(feature = "mpd")] {
+        cli = cli.arg(arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
+                      .group("sources")
+                      .value_parser(value_parser!(SocketAddr))
+                      .default_missing_value("127.0.0.0:6600"))
+        .next_help_heading("MPD Options")
+        .arg(
+            arg!(--"status-icons" <ICONS> "Status icons")
+                .value_parser(mpd::parse_player_icons)
+                .default_value(""),
         )
-        .get_matches();
-    let text = text_from_matches(&mut matches)?;
+        .arg(
+            arg!(--"repeat-icons" <ICONS> "Repeat icons to use")
+                .value_parser(mpd::parse_status_icons)
+                .default_value("凌稜"),
+        )
+        .group(
+            ArgGroup::new("mpd-options")
+                .requires("mpd")
+                .multiple(true)
+                .args(["status-icons", "repeat-icons"]),
+        );
+    }
+
+    let mut matches = cli.get_matches();
+    let mut text = text_from_matches(&mut matches)?;
     let (cmd, mut sub_matches) = matches.remove_subcommand().unwrap();
     match cmd.as_str() {
         "run" => {
@@ -138,9 +104,9 @@ fn main() -> Result<(), io::Error> {
             text.run_on_terminal(duration)?;
         }
         "iter" => {
-            let iter_file = sub_matches.remove_one::<String>("ITER_FILE").unwrap();
+            let iter_file = sub_matches.remove_one::<PathBuf>("ITER_FILE").unwrap();
             let (i, prev_content) = match fs::read_to_string(&iter_file) {
-                Ok(s) => match s.split_once(char::is_whitespace) {
+                Ok(s) => match s.split_once(' ') {
                     Some((number, content)) => (
                         number
                             .parse::<usize>()

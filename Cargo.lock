@@ -51,6 +51,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bufstream"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40e38929add23cdf8a366df9b0e088953150724bcbe5fc330b0d8eb3b328eec8"
+
+[[package]]
 name = "clap"
 version = "4.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -114,7 +120,17 @@ version = "1.1.0"
 dependencies = [
  "clap",
  "humantime",
+ "mpd",
  "ticker",
+]
+
+[[package]]
+name = "mpd"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e12cace5746cb0aa78faa6cd2caec9f9c01882fc0e6b54d34685a2d3303ea34"
+dependencies = [
+ "bufstream",
 ]
 
 [[package]]

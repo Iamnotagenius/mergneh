@@ -13,8 +13,12 @@ license = "WTFPL"
 [dependencies]
 clap = { version = "4.5.4", features = ["derive", "cargo"] }
 humantime = "2.1.0"
+mpd = { version = "0.1.0", optional = true }
 ticker = "0.1.1"
 
 [[bin]]
 name = "mg"
 path = "src/main.rs"
+
+[features]
+mpd = [ "dep:mpd" ]

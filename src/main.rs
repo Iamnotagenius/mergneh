@@ -17,6 +17,8 @@ use clap::{
 use text_source::TextSource;
 
 use crate::running_text::RunningText;
+#[cfg(feature = "mpd")]
+use crate::mpd::MpdFormat;
 
 fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error> {
     RunningText::new(
@@ -65,10 +67,13 @@ fn main() -> Result<(), io::Error> {
                 .arg_required_else_help(true),
         );
     #[cfg(feature = "mpd")] {
-        cli = cli.arg(arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
+        cli = cli
+            .arg(
+                arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
                       .group("sources")
                       .value_parser(value_parser!(SocketAddr))
-                      .default_missing_value("127.0.0.0:6600"))
+                      .default_missing_value("127.0.0.0:6600")
+                    )
         .next_help_heading("MPD Options")
         .arg(
             arg!(--"status-icons" <ICONS> "Status icons")
@@ -78,13 +83,28 @@ fn main() -> Result<(), io::Error> {
         .arg(
             arg!(--"repeat-icons" <ICONS> "Repeat icons to use")
                 .value_parser(mpd::parse_status_icons)
-                .default_value("凌稜"),
-        )
-        .group(
-            ArgGroup::new("mpd-options")
+                .default_value("凌稜")
                 .requires("mpd")
-                .multiple(true)
-                .args(["status-icons", "repeat-icons"]),
+        )
+        .arg(
+            arg!(--format <FORMAT> "Format string to use in running text")
+                .value_parser(value_parser!(MpdFormat))
+                .default_value("{artist} - {title}")
+                .requires("mpd")
+        )
+        .arg(
+            arg!(-L --"prefix-format" <FORMAT> "Format string to use in prefix")
+                .value_parser(value_parser!(MpdFormat))
+                .conflicts_with("prefix")
+                .default_value("")
+                .requires("mpd")
+        )
+        .arg(
+            arg!(-R --"suffix-format" <FORMAT> "Format string to use in suffix")
+                .value_parser(value_parser!(MpdFormat))
+                .conflicts_with("suffix")
+                .default_value("")
+                .requires("mpd")
         );
     }
 

@@ -1,14 +1,15 @@
 use clap::{ArgMatches, Id};
-#[cfg(feature = "mpd")]
-use mpd::Client;
 
 use std::{path::Path, io::{self}, fs::{self}, net::SocketAddr};
 
-#[derive(Debug)]
+use crate::mpd::MpdFormat;
+#[cfg(feature = "mpd")]
+use crate::mpd::MpdSource;
+
 pub enum TextSource {
     String(String),
     #[cfg(feature = "mpd")]
-    Mpd(Client),
+    Mpd(MpdSource),
 }
 
 impl TextSource {
@@ -20,9 +21,16 @@ impl TextSource {
             arg.to_owned()
         }))
     }
-    pub fn get_content(&mut self) -> String {
+    pub fn get_content(&mut self) -> (String, bool) {
         match self {
-            TextSource::String(s) => s.clone(),
+            TextSource::String(s) => (s.clone(), false),
+            #[cfg(feature = "mpd")]
+            TextSource::Mpd(_) => todo!(),
+        }
+    }
+    pub fn format_bounds(&mut self, prefix: &str, suffix: &str) -> (Option<String>, Option<String>) {
+        match self {
+            TextSource::String(_) => (Some(prefix.to_owned()), Some(suffix.to_owned())),
             #[cfg(feature = "mpd")]
             TextSource::Mpd(_) => todo!(),
         }
@@ -48,7 +56,12 @@ impl TryFrom<&mut ArgMatches> for TextSource {
             "string" => TextSource::String(src.unwrap().unwrap()),
             "stdin" => TextSource::String(io::read_to_string(io::stdin())?),
             #[cfg(feature = "mpd")]
-            "mpd" => TextSource::Mpd(Client::connect(value.try_remove_one::<SocketAddr>(kind.as_str()).unwrap().unwrap()).expect("MPD connection error")),
+            "mpd" => TextSource::Mpd(MpdSource::new(
+                value.try_remove_one::<SocketAddr>(kind.as_str()).unwrap().unwrap(),
+                value.remove_one("format").unwrap(),
+                value.remove_one::<MpdFormat>("prefix-format"),
+                value.remove_one::<MpdFormat>("suffix-format")
+            )),
             _ => unreachable!(),
         });
     }

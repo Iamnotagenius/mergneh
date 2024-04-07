@@ -31,7 +31,7 @@ impl RunningText {
         suffix: String,
         repeat: bool,
     ) -> Result<Self, io::Error> {
-        let mut content: String = source.get_content();
+        let (mut content, _) = source.get_content();
         replace_newline(&mut content, &newline);
         replace_newline(&mut separator, &newline);
         let content_len = content.len();

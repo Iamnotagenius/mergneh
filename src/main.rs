@@ -16,7 +16,7 @@ use std::{
 use std::net::SocketAddr;
 
 use clap::{
-    arg, command, crate_description, crate_name, ArgAction, ArgGroup, ArgMatches, Command, value_parser,
+    arg, builder::ValueParser, command, crate_description, crate_name, value_parser, ArgAction, ArgGroup, ArgMatches, Command
 };
 use text_source::TextSource;
 #[cfg(feature = "waybar")]
@@ -30,20 +30,17 @@ use crate::mpd::{StatusIcons, StateStatusIcons, MpdFormatter};
 fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error> {
     RunningText::new(
         TextSource::try_from(&mut *matches)?,
-        matches
-            .remove_one::<String>("window")
-            .map(|s| s.parse::<usize>().expect("Window size must be a number"))
-            .unwrap(),
-        matches.remove_one::<String>("separator").unwrap(),
-        matches.remove_one::<String>("newline").unwrap(),
-        matches.remove_one::<bool>("dont-repeat").unwrap(),
+        matches.remove_one::<u64>("window").unwrap() as usize,
+        matches.remove_one("separator").unwrap(),
+        matches.remove_one("newline").unwrap(),
+        matches.remove_one("dont-repeat").unwrap(),
     )
 }
 
 fn main() -> Result<(), io::Error> {
     let mut cli = command!(crate_name!())
         .about(crate_description!())
-        .arg(arg!(-w --window <WINDOW> "Window size").default_value("6"))
+        .arg(arg!(-w --window <WINDOW> "Window size").value_parser(value_parser!(u64).range(1..)).default_value("6"))
         .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
         .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
         .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))

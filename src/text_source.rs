@@ -6,6 +6,7 @@ use std::{
     fs::{self},
     io::{self},
     path::Path,
+    process::Command,
 };
 
 #[cfg(feature = "mpd")]
@@ -19,8 +20,37 @@ pub struct Content {
 }
 
 #[derive(Debug)]
+pub struct ExecSource {
+    pub cmd: Command,
+    pub prefix: String,
+    pub suffix: String,
+    last_output: String,
+}
+
+impl ExecSource {
+    pub fn get(&mut self, content: &mut String) -> bool {
+        let output = String::from_utf8(
+            self.cmd
+                .spawn()
+                .expect("Spawn of child failed")
+                .wait_with_output()
+                .expect("Waiting on child failed")
+                .stdout,
+        )
+        .expect("Child's output is invalid UTF-8");
+        if self.last_output == output {
+            false
+        } else {
+            output.clone_into(content);
+            true
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum TextSource {
     String(Content),
+    Exec(ExecSource),
     #[cfg(feature = "mpd")]
     Mpd(Box<MpdSource>),
 }
@@ -36,6 +66,15 @@ impl TextSource {
     pub fn get_initial_content(&mut self) -> Content {
         match self {
             TextSource::String(c) => c.clone(),
+            TextSource::Exec(s) => {
+                let mut output = String::new();
+                s.get(&mut output);
+                Content {
+                    running: output,
+                    prefix: s.prefix.clone(),
+                    suffix: s.suffix.clone(),
+                }
+            }
             #[cfg(feature = "mpd")]
             TextSource::Mpd(c) => {
                 let mut content = Content {
@@ -71,11 +110,13 @@ impl TextSource {
             TextSource::String(_) => false,
             #[cfg(feature = "mpd")]
             TextSource::Mpd(s) => s.get(content, prefix, suffix).expect("MPD format error"),
+            TextSource::Exec(s) => s.get(content),
         }
     }
     pub fn content_can_change(&self) -> bool {
         match self {
             Self::String(_) => false,
+            Self::Exec(_) => false,
             #[cfg(feature = "mpd")]
             Self::Mpd(_) => true,
         }

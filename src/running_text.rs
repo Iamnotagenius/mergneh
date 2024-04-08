@@ -5,9 +5,9 @@ use std::{
 
 use ticker::Ticker;
 
-use crate::{utils::replace_newline, TextSource, text_source::Content};
 #[cfg(feature = "waybar")]
 use crate::waybar::{RunningTextWithTooltip, Tooltip};
+use crate::{text_source::Content, utils::replace_newline, TextSource};
 
 pub struct RunningText {
     source: TextSource,
@@ -33,7 +33,11 @@ impl RunningText {
         newline: String,
         repeat: bool,
     ) -> Result<Self, io::Error> {
-        let Content { running: mut content, prefix, suffix } = source.get_initial_content();
+        let Content {
+            running: mut content,
+            prefix,
+            suffix,
+        } = source.get_initial_content();
         replace_newline(&mut content, &newline);
         replace_newline(&mut separator, &newline);
         let content_len = content.len();
@@ -78,7 +82,12 @@ impl RunningText {
             i = 0;
         }
         self.i = i;
-        self.byte_offset = self.content.char_indices().nth(i % self.full_content_char_len).unwrap().0;
+        self.byte_offset = self
+            .content
+            .char_indices()
+            .nth(i % self.full_content_char_len)
+            .unwrap()
+            .0;
         println!("{}", self.next().unwrap());
         self.i
     }
@@ -90,27 +99,26 @@ impl RunningText {
     pub fn run_in_waybar(self, duration: Duration, tooltip: Option<Tooltip>) -> io::Result<()> {
         match tooltip {
             Some(Tooltip::Simple(s)) => {
-            let tick = Ticker::new(self, duration);
+                let tick = Ticker::new(self, duration);
                 for text in tick {
                     println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text, s);
                 }
-            },
+            }
             Some(t) => {
-            let tick = Ticker::new(self.with_tooltip(t), duration);
+                let tick = Ticker::new(self.with_tooltip(t), duration);
                 for (text, tt) in tick {
                     println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text, tt);
                 }
-            },
+            }
             None => {
                 let tick = Ticker::new(self, duration);
                 for text in tick {
                     println!("{{\"text\":\"{}\"}}", text);
                 }
-            },
-        }; 
+            }
+        };
         io::stdout().flush()?;
         Ok(())
-
     }
     pub fn get_source(&self) -> &TextSource {
         &self.source
@@ -120,7 +128,10 @@ impl RunningText {
     }
     fn get_new_content(&mut self) {
         // TODO: need two bools, one for running content another for prefix/suffix
-        if !self.source.get_content(&mut self.content, &mut self.prefix, &mut self.suffix) {
+        if !self
+            .source
+            .get_content(&mut self.content, &mut self.prefix, &mut self.suffix)
+        {
             return;
         }
         self.i = 0;
@@ -150,9 +161,9 @@ impl Iterator for RunningText {
             if self.source.content_can_change() {
                 self.text.clear();
                 self.text.push_str(&self.prefix);
-                self.text.push_str(&self.content[..self.content.len() - self.separator.len()]);
+                self.text
+                    .push_str(&self.content[..self.content.len() - self.separator.len()]);
                 self.text.push_str(&self.suffix);
-
             }
             return Some(self.text.to_owned());
         }

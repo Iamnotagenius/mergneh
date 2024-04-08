@@ -14,6 +14,7 @@ pub struct Content {
     pub suffix: String,
 }
 
+#[derive(Debug)]
 pub enum TextSource {
     String(Content),
     #[cfg(feature = "mpd")]
@@ -31,13 +32,13 @@ impl TextSource {
             TextSource::Mpd(c) => {
                 let mut content = Content {
                     running: String::new(),
-                    prefix: if c.get_prefix_format().is_constant() {
-                        c.get_prefix_format().to_string()
+                    prefix: if c.prefix_format().is_constant() {
+                        c.prefix_format().to_string()
                     } else {
                         String::new()
                     },
-                    suffix: if c.get_suffix_format().is_constant() {
-                        c.get_suffix_format().to_string()
+                    suffix: if c.suffix_format().is_constant() {
+                        c.suffix_format().to_string()
                     } else {
                         String::new()
                     },

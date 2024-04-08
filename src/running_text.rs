@@ -6,6 +6,7 @@ use std::{
 use ticker::Ticker;
 
 use crate::{utils::replace_newline, TextSource, text_source::Content};
+use crate::waybar::{RunningTextWithTooltip, Tooltip};
 
 pub struct RunningText {
     source: TextSource,
@@ -63,7 +64,7 @@ impl RunningText {
     pub fn get_raw_content(&self) -> &str {
         &self.content
     }
-    pub fn run_on_terminal(self, duration: Duration) -> Result<(), io::Error> {
+    pub fn run_on_terminal(self, duration: Duration) -> io::Result<()> {
         let tick = Ticker::new(self, duration);
         for text in tick {
             print!("\r{}", text);
@@ -79,6 +80,39 @@ impl RunningText {
         self.byte_offset = self.content.char_indices().nth(i % self.full_content_char_len).unwrap().0;
         println!("{}", self.next().unwrap());
         self.i
+    }
+    #[cfg(feature = "waybar")]
+    pub fn with_tooltip(self, tooltip: Tooltip) -> RunningTextWithTooltip {
+        RunningTextWithTooltip::new(self, tooltip)
+    }
+    #[cfg(feature = "waybar")]
+    pub fn run_in_waybar(self, duration: Duration, tooltip: Option<Tooltip>) -> io::Result<()> {
+        match tooltip {
+            Some(Tooltip::Simple(s)) => {
+            let tick = Ticker::new(self, duration);
+                for text in tick {
+                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text, s);
+                }
+            },
+            Some(t) => {
+            let tick = Ticker::new(self.with_tooltip(t), duration);
+                for (text, tt) in tick {
+                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text, tt);
+                }
+            },
+            None => {
+                let tick = Ticker::new(self, duration);
+                for text in tick {
+                    println!("{{\"text\":\"{}\"}}", text);
+                }
+            },
+        }; 
+        io::stdout().flush()?;
+        Ok(())
+
+    }
+    pub fn get_source(&self) -> &TextSource {
+        &self.source
     }
     fn does_content_fit(&self) -> bool {
         !self.repeat && self.window_size >= self.content_char_len

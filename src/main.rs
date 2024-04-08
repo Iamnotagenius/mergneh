@@ -3,6 +3,7 @@ mod utils;
 mod text_source;
 #[cfg(feature = "mpd")]
 mod mpd;
+mod waybar;
 
 use std::{
     fs::{self},
@@ -17,6 +18,8 @@ use clap::{
     arg, command, crate_description, crate_name, ArgAction, ArgGroup, ArgMatches, Command, value_parser,
 };
 use text_source::TextSource;
+#[cfg(feature = "waybar")]
+use waybar::Tooltip;
 
 use crate::running_text::RunningText;
 
@@ -69,6 +72,20 @@ fn main() -> Result<(), io::Error> {
                 .about("Print just one iteration")
                 .arg_required_else_help(true),
         );
+    #[cfg(feature = "waybar")] {
+        let mut cmd = Command::new("waybar")
+            .arg(arg!(-d --duration <DURATION> "Tick duration")
+                 .value_parser(value_parser!(humantime::Duration))
+                 .default_value("1s"))
+            .arg(arg!([TOOLTIP] "Tooltip to show on hover"))
+            .about("Run text with custom module in waybar (JSON output)");
+        #[cfg(feature = "mpd")] {
+            cmd = cmd.arg(arg!(-t --"tooltip-format" [FORMAT] "Tooltip format to use with MPD")
+                          .value_parser(value_parser!(MpdFormatter))
+                          .default_missing_value("{artist} - {title}"));
+        }
+        cli = cli.subcommand(cmd);
+    }
     #[cfg(feature = "mpd")] {
         cli = cli
             .arg(
@@ -126,7 +143,6 @@ fn main() -> Result<(), io::Error> {
                 .requires("mpd")
         );
     }
-
     let mut matches = cli.get_matches();
     let mut text = text_from_matches(&mut matches)?;
     let (cmd, mut sub_matches) = matches.remove_subcommand().unwrap();
@@ -156,6 +172,22 @@ fn main() -> Result<(), io::Error> {
             };
             let i = text.print_once(i, prev_content.as_str());
             fs::write(iter_file, format!("{i} {}", text.get_raw_content()))?;
+        }
+        #[cfg(feature = "waybar")]
+        "waybar" => {
+            let duration: Duration = sub_matches
+                .remove_one::<humantime::Duration>("duration")
+                .unwrap().into();
+            #[cfg(feature = "mpd")] {
+                let tooltip = sub_matches.remove_one::<MpdFormatter>("tooltip-format")
+                    .map(Tooltip::Mpd)
+                    .or(sub_matches.remove_one("TOOLTIP").map(Tooltip::Simple));
+                text.run_in_waybar(duration, tooltip)?;
+            }
+            #[cfg(not(feature = "mpd"))] {
+                let tooltip = sub_matches.remove_one::<String>("TOOLTIP").map(Tooltip::Simple);
+                text.run_in_waybar(duration, tooltip)?;
+            }
         }
         _ => unreachable!(),
     }

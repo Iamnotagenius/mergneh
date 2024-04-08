@@ -118,6 +118,8 @@ impl Display for MpdFormatParseError {
     }
 }
 impl Error for MpdFormatParseError {}
+
+#[derive(Debug)]
 pub struct MpdSource {
     client: Client,
     current_song: Option<Song>,
@@ -171,16 +173,26 @@ impl MpdSource {
             write!(content, "{}", self.running_format.1)?;
         }
         self.current_song = song;
+        self.current_status = Some(status);
         Ok(true)
     }
-    pub fn get_running_format(&self) -> &MpdFormatter {
+    pub fn running_format(&self) -> &MpdFormatter {
         &self.running_format
     }
-    pub fn get_prefix_format(&self) -> &MpdFormatter {
+    pub fn prefix_format(&self) -> &MpdFormatter {
         &self.prefix_format
     }
-    pub fn get_suffix_format(&self) -> &MpdFormatter {
+    pub fn suffix_format(&self) -> &MpdFormatter {
         &self.suffix_format
+    }
+    pub fn icons(&self) -> &StatusIconsSet {
+        &self.icons
+    }
+    pub fn current_song(&self) -> Option<&Song> {
+        self.current_song.as_ref()
+    }
+    pub fn current_status(&self) -> Option<&Status> {
+        self.current_status.as_ref()
     }
 }
 
@@ -190,6 +202,13 @@ impl MpdFormatter {
     }
     pub fn is_constant(&self) -> bool {
         self.0.iter().all(|ph| matches!(ph, Placeholder::String(_)))
+    }
+    pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> std::fmt::Result {
+        if let (Some(song), Some(status)) = (&source.current_song, &source.current_status) {
+            self.format(&source.icons, song, status, f)
+        } else {
+            Ok(())
+        }
     }
     pub fn format(
         &self,

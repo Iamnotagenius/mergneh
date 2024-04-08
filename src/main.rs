@@ -3,6 +3,7 @@ mod utils;
 mod text_source;
 #[cfg(feature = "mpd")]
 mod mpd;
+#[cfg(feature = "waybar")]
 mod waybar;
 
 use std::{

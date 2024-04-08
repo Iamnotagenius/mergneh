@@ -6,6 +6,7 @@ use std::{
 use ticker::Ticker;
 
 use crate::{utils::replace_newline, TextSource, text_source::Content};
+#[cfg(feature = "waybar")]
 use crate::waybar::{RunningTextWithTooltip, Tooltip};
 
 pub struct RunningText {

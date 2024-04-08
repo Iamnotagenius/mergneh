@@ -82,11 +82,18 @@ fn main() -> Result<(), io::Error> {
                  .value_parser(value_parser!(humantime::Duration))
                  .default_value("1s"))
             .arg(arg!([TOOLTIP] "Tooltip to show on hover"))
+            .arg(arg!(--"tooltip-cmd" <ARGS> ... "Use output of a command for tooltip")
+                 .value_parser(value_parser!(OsString))
+                 .num_args(1..))
+            .group(ArgGroup::new("tooltips")
+                   .multiple(false)
+                   .args(["TOOLTIP", "tooltip-cmd"]))
             .about("Run text with custom module in waybar (JSON output)");
         #[cfg(feature = "mpd")] {
             cmd = cmd.arg(arg!(-t --"tooltip-format" [FORMAT] "Tooltip format to use with MPD")
                           .value_parser(value_parser!(MpdFormatter))
-                          .default_missing_value("{artist} - {title}"));
+                          .default_missing_value("{artist} - {title}")
+                          .group("tooltips"));
         }
         cli = cli.subcommand(cmd);
     }
@@ -190,11 +197,13 @@ fn main() -> Result<(), io::Error> {
             #[cfg(feature = "mpd")] {
                 let tooltip = sub_matches.remove_one::<MpdFormatter>("tooltip-format")
                     .map(Tooltip::Mpd)
-                    .or(sub_matches.remove_one("TOOLTIP").map(Tooltip::Simple));
+                    .or(sub_matches.remove_one("TOOLTIP").map(Tooltip::Simple))
+                    .or(sub_matches.remove_many::<OsString>("tooltip-cmd").map(|vs| Tooltip::Cmd(vs.collect())));
                 text.run_in_waybar(duration, tooltip)?;
             }
             #[cfg(not(feature = "mpd"))] {
-                let tooltip = sub_matches.remove_one::<String>("TOOLTIP").map(Tooltip::Simple);
+                let tooltip = sub_matches.remove_one("TOOLTIP").map(Tooltip::Simple)
+                    .or(sub_matches.remove_many::<OsString>("tooltip-cmd").map(|vs| Tooltip::Cmd(vs.collect())));
                 text.run_in_waybar(duration, tooltip)?;
             }
         }

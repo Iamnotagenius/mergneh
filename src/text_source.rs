@@ -7,8 +7,9 @@ use std::{
     fs::{self},
     io::{self},
     path::Path,
-    process::{Command, Stdio},
 };
+
+use crate::utils::Command;
 
 #[cfg(feature = "mpd")]
 use crate::mpd::{MpdFormatter, MpdSource, StatusIconsSet};
@@ -34,26 +35,15 @@ impl CmdSource {
         prefix: String,
         suffix: String,
     ) -> Self {
-        let mut arg_iter = args.into_iter();
-        let mut cmd = Command::new(arg_iter.next().unwrap());
-        cmd.stdout(Stdio::piped()).args(arg_iter);
         Self {
-            cmd,
+            cmd: args.into_iter().collect(),
             prefix,
             suffix,
             last_output: String::new(),
         }
     }
     pub fn get(&mut self, content: &mut String) -> bool {
-        let output = String::from_utf8(
-            self.cmd
-                .spawn()
-                .expect("Spawn of child failed")
-                .wait_with_output()
-                .expect("Waiting on child failed")
-                .stdout,
-        )
-        .expect("Child's output is invalid UTF-8");
+        let output = self.cmd.spawn_and_read_output().expect("Child error");
         if self.last_output == output {
             false
         } else {

@@ -1,4 +1,11 @@
-use std::{error::Error, fmt::Display, net::SocketAddr, str::FromStr, collections::HashMap, fmt::{Write, self}};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt::Display,
+    fmt::{self, Write},
+    net::SocketAddr,
+    str::FromStr,
+};
 
 use mpd::{Client, Song, State, Status};
 
@@ -50,6 +57,14 @@ impl StatusIcons {
             self.disabled
         }
     }
+
+    pub fn write<T: Write>(&self, state: bool, f: &mut T) -> std::fmt::Result {
+        if let Some(c) = self.get_icon(state) {
+            write!(f, "{}", c)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,7 +95,7 @@ impl StatusIconsSet {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-enum Placeholder {
+pub enum Placeholder {
     String(String),
     Artist,
     AlbumArtist,
@@ -112,7 +127,9 @@ pub enum MpdFormatParseError {
 impl Display for MpdFormatParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MpdFormatParseError::UnknownPlaceholder(placeholder) => write!(f, "Unknown placeholder '{placeholder}'"),
+            MpdFormatParseError::UnknownPlaceholder(placeholder) => {
+                write!(f, "Unknown placeholder '{placeholder}'")
+            }
             MpdFormatParseError::UnmatchedParenthesis => write!(f, "Unmatched '{{' or '}}"),
         }
     }
@@ -145,10 +162,15 @@ impl MpdSource {
             running_format: fmt,
             prefix_format: prefix,
             suffix_format: suffix,
-            icons
+            icons,
         }
     }
-    pub fn get(&mut self, content: &mut String, prefix: &mut String, suffix: &mut String) -> Result<bool, fmt::Error> {
+    pub fn get(
+        &mut self,
+        content: &mut String,
+        prefix: &mut String,
+        suffix: &mut String,
+    ) -> Result<bool, fmt::Error> {
         let song = self.client.currentsong().expect("MPD server error");
         let status = self.client.status().expect("MPD server error");
         // TODO: May go iterate the formatter to inspect actual changes
@@ -167,9 +189,9 @@ impl MpdSource {
         }
         content.clear();
         if let Some(s) = song.as_ref() {
-            self.running_format.format(&self.icons, s, &status, content)?;
-        }
-        else {
+            self.running_format
+                .format(&self.icons, s, &status, content)?;
+        } else {
             write!(content, "{}", self.running_format.1)?;
         }
         self.current_song = song;
@@ -201,7 +223,7 @@ impl MpdFormatter {
         Self(vec![Placeholder::String(str)], "N/A".to_owned())
     }
     pub fn is_constant(&self) -> bool {
-        self.0.iter().all(|ph| matches!(ph, Placeholder::String(_)))
+        self.iter().all(|ph| matches!(ph, Placeholder::String(_)))
     }
     pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> std::fmt::Result {
         if let (Some(song), Some(status)) = (&source.current_song, &source.current_status) {
@@ -215,73 +237,96 @@ impl MpdFormatter {
         icons: &StatusIconsSet,
         song: &Song,
         status: &Status,
-        f: &mut String
+        f: &mut String,
     ) -> std::fmt::Result {
-        let tags: HashMap<String, String> = song.tags.iter().cloned().collect();
-        for ph in self.0.iter() {
+        let tags: HashMap<&str, &str> = song
+            .tags
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        for ph in self.iter() {
             match ph {
-                Placeholder::String(s) =>       write!(f, "{}", s),
-                Placeholder::Artist =>          write!(f, "{}", song.artist.as_ref().unwrap_or(&self.1)),
-                Placeholder::AlbumArtist =>     write!(f, "{}", tags.get("albumartist").unwrap_or(&self.1)),
-                Placeholder::Album =>           write!(f, "{}", tags.get("album").unwrap_or(&self.1)),
-                Placeholder::Title =>           write!(f, "{}", song.title.as_ref().unwrap_or(&self.1)),
-                Placeholder::Filename =>        write!(f, "{}", &song.file),
-                Placeholder::Date =>            write!(f, "{}", tags.get("date").unwrap_or(&self.1)),
-                Placeholder::Volume =>          write!(f, "{}", status.volume),
-                Placeholder::ElapsedTime =>     match status.elapsed {
+                Placeholder::String(s) => write!(f, "{}", s),
+                Placeholder::Artist => write!(f, "{}", self.get_or_default(song.artist.as_ref())),
+                Placeholder::AlbumArtist => {
+                    write!(f, "{}", self.get_or_default(tags.get("albumartist")))
+                }
+                Placeholder::Album => write!(f, "{}", self.get_or_default(tags.get("album"))),
+                Placeholder::Title => write!(f, "{}", self.get_or_default(song.title.as_ref())),
+                Placeholder::Filename => write!(f, "{}", &song.file),
+                Placeholder::Date => write!(f, "{}", self.get_or_default(tags.get("date"))),
+                Placeholder::Volume => write!(f, "{}", status.volume),
+                Placeholder::ElapsedTime => match status.elapsed {
                     Some(e) => write!(f, "{:02}:{:02}", e.as_secs() / 60, e.as_secs() % 60),
                     None => write!(f, "{}", self.1),
-                } 
-                Placeholder::TotalTime =>       match status.duration {
+                },
+                Placeholder::TotalTime => match status.duration {
                     Some(d) => write!(f, "{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60),
                     None => write!(f, "{}", self.1),
                 },
-                Placeholder::SongPosition =>    todo!(),
-                Placeholder::QueueLength =>     todo!(),
-                Placeholder::StateIcon =>       write!(f, "{}", icons.state.get_icon(status.state)),
-                Placeholder::ConsumeIcon =>     todo!(),
-                Placeholder::RandomIcon =>      todo!(),
-                Placeholder::RepeatIcon =>      todo!(),
-                Placeholder::SingleIcon =>      todo!(),
+                Placeholder::SongPosition => {
+                    let pos = status.song.map(|p| p.pos.to_string());
+                    write!(f, "{}", self.get_or_default(pos.as_ref()))
+                }
+                Placeholder::QueueLength => write!(f, "{}", status.queue_len.to_string()),
+                Placeholder::StateIcon => write!(f, "{}", icons.state.get_icon(status.state)),
+                Placeholder::ConsumeIcon => icons.consume.write(status.consume, f),
+                Placeholder::RandomIcon => icons.random.write(status.random, f),
+                Placeholder::RepeatIcon => icons.repeat.write(status.repeat, f),
+                Placeholder::SingleIcon => icons.single.write(status.single, f),
             }?;
         }
         Ok(())
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Placeholder> {
+        self.0.iter()
+    }
+    pub fn get_or_default<'a, T: AsRef<str>>(&'a self, str: Option<&'a T>) -> &'a str {
+        match str {
+            Some(s) => s.as_ref(),
+            None => self.1.as_str(),
+        }
     }
 }
 
 impl Display for MpdFormatter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for ph in self.0.iter() {
+        for ph in self.iter() {
             if let Placeholder::String(s) = ph {
                 for part in s.split_inclusive(['{', '}']) {
                     write!(f, "{}", part)?;
                     match part.chars().last().expect("Part must not be empty") {
                         c if matches!(c, '{' | '}') => write!(f, "{}", c)?,
-                        _ => continue
+                        _ => continue,
                     };
                 }
             } else {
-            write!(f, "{}", match ph {
-                Placeholder::Album        =>        "{album}",
-                Placeholder::AlbumArtist  =>  "{albumArtist}",
-                Placeholder::Artist       =>       "{artist}",
-                Placeholder::ConsumeIcon  =>  "{consumeIcon}",
-                Placeholder::Date         =>         "{date}",
-                Placeholder::ElapsedTime  =>  "{elapsedTime}",
-                Placeholder::Filename     =>     "{filename}",
-                Placeholder::QueueLength  =>  "{queueLength}",
-                Placeholder::RandomIcon   =>   "{randomIcon}",
-                Placeholder::RepeatIcon   =>   "{repeatIcon}",
-                Placeholder::SingleIcon   =>   "{singleIcon}",
-                Placeholder::SongPosition => "{songPosition}",
-                Placeholder::StateIcon    =>    "{stateIcon}",
-                Placeholder::Title        =>        "{title}",
-                Placeholder::TotalTime    =>    "{totalTime}",
-                Placeholder::Volume       =>       "{volume}",
-                Placeholder::String(_)    =>   unreachable!(),
-            })?;
+                write!(
+                    f,
+                    "{}",
+                    match ph {
+                        Placeholder::Album => "{album}",
+                        Placeholder::AlbumArtist => "{albumArtist}",
+                        Placeholder::Artist => "{artist}",
+                        Placeholder::ConsumeIcon => "{consumeIcon}",
+                        Placeholder::Date => "{date}",
+                        Placeholder::ElapsedTime => "{elapsedTime}",
+                        Placeholder::Filename => "{filename}",
+                        Placeholder::QueueLength => "{queueLength}",
+                        Placeholder::RandomIcon => "{randomIcon}",
+                        Placeholder::RepeatIcon => "{repeatIcon}",
+                        Placeholder::SingleIcon => "{singleIcon}",
+                        Placeholder::SongPosition => "{songPosition}",
+                        Placeholder::StateIcon => "{stateIcon}",
+                        Placeholder::Title => "{title}",
+                        Placeholder::TotalTime => "{totalTime}",
+                        Placeholder::Volume => "{volume}",
+                        Placeholder::String(_) => unreachable!(),
+                    }
+                )?;
             }
-        };
+        }
         Ok(())
     }
 }
@@ -326,29 +371,33 @@ impl FromStr for MpdFormatter {
 
             let right_par = match parse_slice.find(['{', '}']) {
                 Some(i) => i,
-                None => return Err(MpdFormatParseError::UnmatchedParenthesis)
+                None => return Err(MpdFormatParseError::UnmatchedParenthesis),
             };
             if let Some('{') = parse_slice[right_par..].chars().next() {
                 return Err(MpdFormatParseError::UnmatchedParenthesis);
             }
             placeholders.push(match &parse_slice[..right_par] {
-                "album"         =>        Placeholder::Album,
-                "albumArtist"   =>  Placeholder::AlbumArtist,
-                "artist"        =>       Placeholder::Artist,
-                "consumeIcon"   =>  Placeholder::ConsumeIcon,
-                "date"          =>         Placeholder::Date,
-                "elapsedTime"   =>  Placeholder::ElapsedTime,
-                "filename"      =>     Placeholder::Filename,
-                "queueLength"   =>  Placeholder::QueueLength,
-                "randomIcon"    =>   Placeholder::RandomIcon,
-                "repeatIcon"    =>   Placeholder::RepeatIcon,
-                "singleIcon"    =>   Placeholder::SingleIcon,
-                "songPosition"  => Placeholder::SongPosition,
-                "stateIcon"     =>    Placeholder::StateIcon,
-                "title"         =>        Placeholder::Title,
-                "totalTime"     =>    Placeholder::TotalTime,
-                "volume"        =>       Placeholder::Volume,
-                _ => return Err(MpdFormatParseError::UnknownPlaceholder(parse_slice[..right_par].to_owned()))
+                "album" => Placeholder::Album,
+                "albumArtist" => Placeholder::AlbumArtist,
+                "artist" => Placeholder::Artist,
+                "consumeIcon" => Placeholder::ConsumeIcon,
+                "date" => Placeholder::Date,
+                "elapsedTime" => Placeholder::ElapsedTime,
+                "filename" => Placeholder::Filename,
+                "queueLength" => Placeholder::QueueLength,
+                "randomIcon" => Placeholder::RandomIcon,
+                "repeatIcon" => Placeholder::RepeatIcon,
+                "singleIcon" => Placeholder::SingleIcon,
+                "songPosition" => Placeholder::SongPosition,
+                "stateIcon" => Placeholder::StateIcon,
+                "title" => Placeholder::Title,
+                "totalTime" => Placeholder::TotalTime,
+                "volume" => Placeholder::Volume,
+                _ => {
+                    return Err(MpdFormatParseError::UnknownPlaceholder(
+                        parse_slice[..right_par].to_owned(),
+                    ))
+                }
             });
             parse_slice = &parse_slice[right_par + 1..];
         }
@@ -387,7 +436,7 @@ impl FromStr for StatusIcons {
         let mut iter = s.chars();
         let result = Ok(StatusIcons {
             enabled: iter.next().ok_or(IconSetParseError::NotEnoughChars)?,
-            disabled: iter.next()
+            disabled: iter.next(),
         });
         if iter.next().is_some() {
             return Err(IconSetParseError::TooManyChars);
@@ -398,7 +447,7 @@ impl FromStr for StatusIcons {
 
 #[cfg(test)]
 mod tests {
-    use crate::mpd::{MpdFormatter, Placeholder, MpdFormatParseError};
+    use crate::mpd::{MpdFormatParseError, MpdFormatter, Placeholder};
     macro_rules! ph {
         ($p:ident) => {
             Placeholder::$p

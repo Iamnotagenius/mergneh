@@ -1,11 +1,15 @@
 use clap::{ArgMatches, Id};
 
-use std::{path::Path, io::{self}, fs::{self}};
 #[cfg(feature = "mpd")]
 use std::net::SocketAddr;
+use std::{
+    fs::{self},
+    io::{self},
+    path::Path,
+};
 
 #[cfg(feature = "mpd")]
-use crate::mpd::{MpdFormatter, MpdSource, StatusIcons, StateStatusIcons, StatusIconsSet};
+use crate::mpd::{MpdFormatter, MpdSource, StateStatusIcons, StatusIcons, StatusIconsSet};
 
 #[derive(Debug, Clone)]
 pub struct Content {
@@ -23,7 +27,11 @@ pub enum TextSource {
 
 impl TextSource {
     pub fn content(running: String, prefix: String, suffix: String) -> TextSource {
-        TextSource::String(Content { running, prefix, suffix })
+        TextSource::String(Content {
+            running,
+            prefix,
+            suffix,
+        })
     }
     pub fn get_initial_content(&mut self) -> Content {
         match self {
@@ -43,12 +51,22 @@ impl TextSource {
                         String::new()
                     },
                 };
-                c.get(&mut content.running, &mut content.prefix, &mut content.suffix).expect("MPD format error");
+                c.get(
+                    &mut content.running,
+                    &mut content.prefix,
+                    &mut content.suffix,
+                )
+                .expect("MPD format error");
                 content
-            },
+            }
         }
     }
-    pub fn get_content(&mut self, content: &mut String, prefix: &mut String, suffix: &mut String) -> bool {
+    pub fn get_content(
+        &mut self,
+        content: &mut String,
+        prefix: &mut String,
+        suffix: &mut String,
+    ) -> bool {
         match self {
             TextSource::String(_) => false,
             #[cfg(feature = "mpd")]
@@ -59,7 +77,7 @@ impl TextSource {
         match self {
             Self::String(_) => false,
             #[cfg(feature = "mpd")]
-            Self::Mpd(_) => true
+            Self::Mpd(_) => true,
         }
     }
 }
@@ -73,23 +91,32 @@ impl TryFrom<&mut ArgMatches> for TextSource {
         let prefix = value.remove_one::<String>("prefix").unwrap();
         let suffix = value.remove_one::<String>("suffix").unwrap();
         return Ok(match kind.as_str() {
-            "SOURCE" => TextSource::content(from_file_or_string(&src.unwrap().unwrap())?, prefix, suffix),
-            "file" => TextSource::content(fs::read_to_string(src.unwrap().unwrap())?, prefix, suffix),
+            "SOURCE" => {
+                TextSource::content(from_file_or_string(&src.unwrap().unwrap())?, prefix, suffix)
+            }
+            "file" => {
+                TextSource::content(fs::read_to_string(src.unwrap().unwrap())?, prefix, suffix)
+            }
             "string" => TextSource::content(src.unwrap().unwrap(), prefix, suffix),
             "stdin" => TextSource::content(io::read_to_string(io::stdin())?, prefix, suffix),
             #[cfg(feature = "mpd")]
             "mpd" => TextSource::Mpd(Box::new(MpdSource::new(
-                value.try_remove_one::<SocketAddr>(kind.as_str()).unwrap().unwrap(),
+                value.try_remove_one(kind.as_str()).unwrap().unwrap(),
                 value.remove_one("format").unwrap(),
-                value.remove_one::<MpdFormatter>("prefix-format").unwrap_or(MpdFormatter::only_string(prefix)),
-                value.remove_one::<MpdFormatter>("suffix-format").unwrap_or(MpdFormatter::only_string(suffix)),
+                value
+                    .remove_one("prefix-format")
+                    .unwrap_or(MpdFormatter::only_string(prefix)),
+                value
+                    .remove_one("suffix-format")
+                    .unwrap_or(MpdFormatter::only_string(suffix)),
                 StatusIconsSet::new(
-                    value.remove_one::<StateStatusIcons>("status-icons").unwrap(),
-                    value.remove_one::<StatusIcons>("consume-icons").unwrap(),
-                    value.remove_one::<StatusIcons>("random-icons").unwrap(),
-                    value.remove_one::<StatusIcons>("repeat-icons").unwrap(),
-                    value.remove_one::<StatusIcons>("single-icons").unwrap(),
-                )
+                    value.remove_one("status-icons").unwrap(),
+                    value.remove_one("consume-icons").unwrap(),
+                    value.remove_one("random-icons").unwrap(),
+                    value.remove_one("repeat-icons").unwrap(),
+                    value.remove_one("single-icons").unwrap(),
+                ),
+                value.remove_one("default-placeholder").unwrap(),
             ))),
             _ => unreachable!(),
         });

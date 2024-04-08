@@ -116,7 +116,7 @@ pub enum Placeholder {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct MpdFormatter(Vec<Placeholder>, String);
+pub struct MpdFormatter(Vec<Placeholder>);
 
 #[derive(Debug)]
 pub enum MpdFormatParseError {
@@ -145,6 +145,7 @@ pub struct MpdSource {
     prefix_format: MpdFormatter,
     suffix_format: MpdFormatter,
     icons: StatusIconsSet,
+    default_placeholder: String,
 }
 
 impl MpdSource {
@@ -154,6 +155,7 @@ impl MpdSource {
         prefix: MpdFormatter,
         suffix: MpdFormatter,
         icons: StatusIconsSet,
+        default_placeholder: String,
     ) -> Self {
         Self {
             client: Client::connect(addr).expect("MPD connection error"),
@@ -163,6 +165,7 @@ impl MpdSource {
             prefix_format: prefix,
             suffix_format: suffix,
             icons,
+            default_placeholder,
         }
     }
     pub fn get(
@@ -177,11 +180,23 @@ impl MpdSource {
         if let Some(s) = song.as_ref() {
             if !self.prefix_format.is_constant() {
                 prefix.clear();
-                self.prefix_format.format(&self.icons, s, &status, prefix)?;
+                self.prefix_format.format(
+                    &self.icons,
+                    s,
+                    &status,
+                    &self.default_placeholder,
+                    prefix,
+                )?;
             }
             if !self.suffix_format.is_constant() {
                 suffix.clear();
-                self.suffix_format.format(&self.icons, s, &status, suffix)?;
+                self.suffix_format.format(
+                    &self.icons,
+                    s,
+                    &status,
+                    &self.default_placeholder,
+                    suffix,
+                )?;
             }
         }
         if song == self.current_song {
@@ -189,10 +204,15 @@ impl MpdSource {
         }
         content.clear();
         if let Some(s) = song.as_ref() {
-            self.running_format
-                .format(&self.icons, s, &status, content)?;
+            self.running_format.format(
+                &self.icons,
+                s,
+                &status,
+                &self.default_placeholder,
+                content,
+            )?;
         } else {
-            write!(content, "{}", self.running_format.1)?;
+            write!(content, "{}", self.default_placeholder)?;
         }
         self.current_song = song;
         self.current_status = Some(status);
@@ -220,14 +240,14 @@ impl MpdSource {
 
 impl MpdFormatter {
     pub fn only_string(str: String) -> Self {
-        Self(vec![Placeholder::String(str)], "N/A".to_owned())
+        Self(vec![Placeholder::String(str)])
     }
     pub fn is_constant(&self) -> bool {
         self.iter().all(|ph| matches!(ph, Placeholder::String(_)))
     }
     pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> std::fmt::Result {
         if let (Some(song), Some(status)) = (&source.current_song, &source.current_status) {
-            self.format(&source.icons, song, status, f)
+            self.format(&source.icons, song, status, &source.default_placeholder, f)
         } else {
             Ok(())
         }
@@ -237,9 +257,10 @@ impl MpdFormatter {
         icons: &StatusIconsSet,
         song: &Song,
         status: &Status,
+        default: &str,
         f: &mut String,
     ) -> std::fmt::Result {
-        let tags: HashMap<&str, &str> = song
+        let mut tags: HashMap<&str, &str> = song
             .tags
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -247,26 +268,26 @@ impl MpdFormatter {
         for ph in self.iter() {
             match ph {
                 Placeholder::String(s) => write!(f, "{}", s),
-                Placeholder::Artist => write!(f, "{}", self.get_or_default(song.artist.as_ref())),
+                Placeholder::Artist => write!(f, "{}", song.artist.as_deref().unwrap_or(default)),
                 Placeholder::AlbumArtist => {
-                    write!(f, "{}", self.get_or_default(tags.get("albumartist")))
+                    write!(f, "{}", tags.remove("albumartist").unwrap_or(default))
                 }
-                Placeholder::Album => write!(f, "{}", self.get_or_default(tags.get("album"))),
-                Placeholder::Title => write!(f, "{}", self.get_or_default(song.title.as_ref())),
+                Placeholder::Album => write!(f, "{}", tags.remove("album").unwrap_or(default)),
+                Placeholder::Title => write!(f, "{}", song.title.as_deref().unwrap_or(default)),
                 Placeholder::Filename => write!(f, "{}", &song.file),
-                Placeholder::Date => write!(f, "{}", self.get_or_default(tags.get("date"))),
+                Placeholder::Date => write!(f, "{}", tags.remove("date").unwrap_or(default)),
                 Placeholder::Volume => write!(f, "{}", status.volume),
                 Placeholder::ElapsedTime => match status.elapsed {
                     Some(e) => write!(f, "{:02}:{:02}", e.as_secs() / 60, e.as_secs() % 60),
-                    None => write!(f, "{}", self.1),
+                    None => write!(f, "{}", default),
                 },
                 Placeholder::TotalTime => match status.duration {
                     Some(d) => write!(f, "{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60),
-                    None => write!(f, "{}", self.1),
+                    None => write!(f, "{}", default),
                 },
                 Placeholder::SongPosition => {
                     let pos = status.song.map(|p| p.pos.to_string());
-                    write!(f, "{}", self.get_or_default(pos.as_ref()))
+                    write!(f, "{}", pos.as_deref().unwrap_or(default))
                 }
                 Placeholder::QueueLength => write!(f, "{}", status.queue_len.to_string()),
                 Placeholder::StateIcon => write!(f, "{}", icons.state.get_icon(status.state)),
@@ -281,12 +302,6 @@ impl MpdFormatter {
 
     pub fn iter(&self) -> std::slice::Iter<'_, Placeholder> {
         self.0.iter()
-    }
-    pub fn get_or_default<'a, T: AsRef<str>>(&'a self, str: Option<&'a T>) -> &'a str {
-        match str {
-            Some(s) => s.as_ref(),
-            None => self.1.as_str(),
-        }
     }
 }
 
@@ -404,7 +419,7 @@ impl FromStr for MpdFormatter {
         if !raw.is_empty() {
             placeholders.push(Placeholder::String(raw));
         }
-        Ok(Self(placeholders, "N\\A".to_owned()))
+        Ok(Self(placeholders))
     }
 }
 
@@ -495,7 +510,7 @@ mod tests {
     fn format_display_test() {
         macro_rules! assert {
             ([$($item:tt),*] => $str:literal) => {
-                assert_eq!(MpdFormatter(vec![$(ph!($item)),*], "N/A".to_owned()).to_string(), $str)
+                assert_eq!(MpdFormatter(vec![$(ph!($item)),*]).to_string(), $str)
             };
         }
         assert!([Artist, " - ", Title] => "{artist} - {title}");

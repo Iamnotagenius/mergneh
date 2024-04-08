@@ -142,6 +142,11 @@ fn main() -> Result<(), io::Error> {
                 .value_parser(value_parser!(MpdFormatter))
                 .conflicts_with("suffix")
                 .requires("mpd")
+        )
+        .arg(
+            arg!(-D --"default-placeholder" <PLACEHOLDER> "Default placeholder for missing values")
+                .default_value("N/A")
+                .requires("mpd")
         );
     }
     let mut matches = cli.get_matches();

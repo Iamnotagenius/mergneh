@@ -1,6 +1,6 @@
-use std::{error::Error, fmt::Display, net::SocketAddr, str::FromStr};
+use std::{error::Error, fmt::Display, net::SocketAddr, str::FromStr, collections::HashMap, fmt::{Write, self}};
 
-use mpd::{Client, Song};
+use mpd::{Client, Song, State, Status};
 
 #[derive(Debug)]
 pub enum IconSetParseError<const N: usize> {
@@ -19,26 +19,64 @@ impl<const N: usize> Display for IconSetParseError<N> {
 }
 impl<const N: usize> Error for IconSetParseError<N> {}
 
-#[derive(Clone)]
-pub struct PlayerStatusIcons {
+#[derive(Debug, Clone)]
+pub struct StateStatusIcons {
     play: char,
     pause: char,
     stop: char,
 }
 
-#[derive(Clone)]
-pub struct StatusIcons {
-    enabled: char,
-    disabled: char,
+impl StateStatusIcons {
+    pub fn get_icon(&self, state: State) -> char {
+        match state {
+            State::Stop => self.stop,
+            State::Play => self.play,
+            State::Pause => self.pause,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct MpdFormat(Vec<Placeholder>);
+#[derive(Debug, Clone)]
+pub struct StatusIcons {
+    enabled: char,
+    disabled: Option<char>,
+}
+
+impl StatusIcons {
+    pub fn get_icon(&self, state: bool) -> Option<char> {
+        if state {
+            Some(self.enabled)
+        } else {
+            self.disabled
+        }
+    }
+}
 
 #[derive(Debug)]
-pub enum MpdFormatParseError {
-    UnknownPlaceholder(String),
-    UnmatchedParenthesis,
+pub struct StatusIconsSet {
+    state: StateStatusIcons,
+    consume: StatusIcons,
+    random: StatusIcons,
+    repeat: StatusIcons,
+    single: StatusIcons,
+}
+
+impl StatusIconsSet {
+    pub fn new(
+        state_icons: StateStatusIcons,
+        consume_icons: StatusIcons,
+        random_icons: StatusIcons,
+        repeat_icons: StatusIcons,
+        single_icons: StatusIcons,
+    ) -> Self {
+        Self {
+            state: state_icons,
+            consume: consume_icons,
+            random: random_icons,
+            repeat: repeat_icons,
+            single: single_icons,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -62,24 +100,13 @@ enum Placeholder {
     SingleIcon,
 }
 
-pub struct MpdSource {
-    client: Client,
-    current_song: Option<Song>,
-    running_format: MpdFormat,
-    prefix_format: Option<MpdFormat>,
-    suffix_format: Option<MpdFormat>,
-}
+#[derive(Debug, Clone, Default)]
+pub struct MpdFormatter(Vec<Placeholder>, String);
 
-impl MpdSource {
-    pub fn new(addr: SocketAddr, fmt: MpdFormat, prefix: Option<MpdFormat>, suffix: Option<MpdFormat>) -> Self {
-        Self {
-            client: Client::connect(addr).expect("MPD connection error"),
-            current_song: None,
-            running_format: fmt,
-            prefix_format: prefix,
-            suffix_format: suffix,
-        }
-    }
+#[derive(Debug)]
+pub enum MpdFormatParseError {
+    UnknownPlaceholder(String),
+    UnmatchedParenthesis,
 }
 
 impl Display for MpdFormatParseError {
@@ -91,8 +118,119 @@ impl Display for MpdFormatParseError {
     }
 }
 impl Error for MpdFormatParseError {}
+pub struct MpdSource {
+    client: Client,
+    current_song: Option<Song>,
+    current_status: Option<Status>,
+    running_format: MpdFormatter,
+    prefix_format: MpdFormatter,
+    suffix_format: MpdFormatter,
+    icons: StatusIconsSet,
+}
 
-impl Display for MpdFormat {
+impl MpdSource {
+    pub fn new(
+        addr: SocketAddr,
+        fmt: MpdFormatter,
+        prefix: MpdFormatter,
+        suffix: MpdFormatter,
+        icons: StatusIconsSet,
+    ) -> Self {
+        Self {
+            client: Client::connect(addr).expect("MPD connection error"),
+            current_song: None,
+            current_status: None,
+            running_format: fmt,
+            prefix_format: prefix,
+            suffix_format: suffix,
+            icons
+        }
+    }
+    pub fn get(&mut self, content: &mut String, prefix: &mut String, suffix: &mut String) -> Result<bool, fmt::Error> {
+        let song = self.client.currentsong().expect("MPD server error");
+        let status = self.client.status().expect("MPD server error");
+        // TODO: May go iterate the formatter to inspect actual changes
+        if let Some(s) = song.as_ref() {
+            if !self.prefix_format.is_constant() {
+                prefix.clear();
+                self.prefix_format.format(&self.icons, s, &status, prefix)?;
+            }
+            if !self.suffix_format.is_constant() {
+                suffix.clear();
+                self.suffix_format.format(&self.icons, s, &status, suffix)?;
+            }
+        }
+        if song == self.current_song {
+            return Ok(false);
+        }
+        content.clear();
+        if let Some(s) = song.as_ref() {
+            self.running_format.format(&self.icons, s, &status, content)?;
+        }
+        else {
+            write!(content, "{}", self.running_format.1)?;
+        }
+        self.current_song = song;
+        Ok(true)
+    }
+    pub fn get_running_format(&self) -> &MpdFormatter {
+        &self.running_format
+    }
+    pub fn get_prefix_format(&self) -> &MpdFormatter {
+        &self.prefix_format
+    }
+    pub fn get_suffix_format(&self) -> &MpdFormatter {
+        &self.suffix_format
+    }
+}
+
+impl MpdFormatter {
+    pub fn only_string(str: String) -> Self {
+        Self(vec![Placeholder::String(str)], "N/A".to_owned())
+    }
+    pub fn is_constant(&self) -> bool {
+        self.0.iter().all(|ph| matches!(ph, Placeholder::String(_)))
+    }
+    pub fn format(
+        &self,
+        icons: &StatusIconsSet,
+        song: &Song,
+        status: &Status,
+        f: &mut String
+    ) -> std::fmt::Result {
+        let tags: HashMap<String, String> = song.tags.iter().cloned().collect();
+        for ph in self.0.iter() {
+            match ph {
+                Placeholder::String(s) =>       write!(f, "{}", s),
+                Placeholder::Artist =>          write!(f, "{}", song.artist.as_ref().unwrap_or(&self.1)),
+                Placeholder::AlbumArtist =>     write!(f, "{}", tags.get("albumartist").unwrap_or(&self.1)),
+                Placeholder::Album =>           write!(f, "{}", tags.get("album").unwrap_or(&self.1)),
+                Placeholder::Title =>           write!(f, "{}", song.title.as_ref().unwrap_or(&self.1)),
+                Placeholder::Filename =>        write!(f, "{}", &song.file),
+                Placeholder::Date =>            write!(f, "{}", tags.get("date").unwrap_or(&self.1)),
+                Placeholder::Volume =>          write!(f, "{}", status.volume),
+                Placeholder::ElapsedTime =>     match status.elapsed {
+                    Some(e) => write!(f, "{:02}:{:02}", e.as_secs() / 60, e.as_secs() % 60),
+                    None => write!(f, "{}", self.1),
+                } 
+                Placeholder::TotalTime =>       match status.duration {
+                    Some(d) => write!(f, "{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60),
+                    None => write!(f, "{}", self.1),
+                },
+                Placeholder::SongPosition =>    todo!(),
+                Placeholder::QueueLength =>     todo!(),
+                Placeholder::StateIcon =>       write!(f, "{}", icons.state.get_icon(status.state)),
+                Placeholder::ConsumeIcon =>     todo!(),
+                Placeholder::RandomIcon =>      todo!(),
+                Placeholder::RepeatIcon =>      todo!(),
+                Placeholder::SingleIcon =>      todo!(),
+            }?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for MpdFormatter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for ph in self.0.iter() {
             if let Placeholder::String(s) = ph {
@@ -129,13 +267,13 @@ impl Display for MpdFormat {
     }
 }
 
-impl FromStr for MpdFormat {
+impl FromStr for MpdFormatter {
     type Err = MpdFormatParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut placeholders = Vec::new();
         let mut raw = String::new();
-        let mut parse_slice = dbg!(s);
+        let mut parse_slice = s;
         while !parse_slice.is_empty() {
             let left_par = match parse_slice.find(['{', '}']) {
                 Some(i) => i,
@@ -195,11 +333,10 @@ impl FromStr for MpdFormat {
             });
             parse_slice = &parse_slice[right_par + 1..];
         }
-        dbg!(&raw);
         if !raw.is_empty() {
             placeholders.push(Placeholder::String(raw));
         }
-        Ok(Self(placeholders))
+        Ok(Self(placeholders, "N\\A".to_owned()))
     }
 }
 
@@ -211,27 +348,38 @@ macro_rules! next_or_err {
     };
 }
 
-pub fn parse_player_icons(icons: &str) -> Result<PlayerStatusIcons, IconSetParseError<3>> {
-    let mut iter = icons.chars();
-    let result = Ok(next_or_err!(iter => PlayerStatusIcons: play, pause, stop));
-    if iter.next().is_some() {
-        return Err(IconSetParseError::TooManyChars);
+impl FromStr for StateStatusIcons {
+    type Err = IconSetParseError<3>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut iter = s.chars();
+        let result = Ok(next_or_err!(iter => StateStatusIcons: play, pause, stop));
+        if iter.next().is_some() {
+            return Err(IconSetParseError::TooManyChars);
+        }
+        result
     }
-    result
 }
 
-pub fn parse_status_icons(icons: &str) -> Result<StatusIcons, IconSetParseError<2>> {
-    let mut iter = icons.chars();
-    let result = Ok(next_or_err!(iter => StatusIcons: enabled, disabled));
-    if iter.next().is_some() {
-        return Err(IconSetParseError::TooManyChars);
+impl FromStr for StatusIcons {
+    type Err = IconSetParseError<2>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut iter = s.chars();
+        let result = Ok(StatusIcons {
+            enabled: iter.next().ok_or(IconSetParseError::NotEnoughChars)?,
+            disabled: iter.next()
+        });
+        if iter.next().is_some() {
+            return Err(IconSetParseError::TooManyChars);
+        }
+        result
     }
-    result
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::mpd::{MpdFormat, Placeholder, MpdFormatParseError};
+    use crate::mpd::{MpdFormatter, Placeholder, MpdFormatParseError};
     macro_rules! ph {
         ($p:ident) => {
             Placeholder::$p
@@ -244,12 +392,12 @@ mod tests {
     fn format_parse_test() {
         macro_rules! assert_ok {
             ($str:literal => [$($item:tt),*]) => {
-                assert_eq!($str.parse::<MpdFormat>().unwrap().0, vec![$(ph!($item)),*])
+                assert_eq!($str.parse::<MpdFormatter>().unwrap().0, vec![$(ph!($item)),*])
             };
         }
         macro_rules! assert_err {
             ($str:literal => $err:ident$(($s:literal))?) => {
-                assert!(matches!($str.parse::<MpdFormat>().unwrap_err(), MpdFormatParseError::$err$((s) if s.as_str() == $s)?));
+                assert!(matches!($str.parse::<MpdFormatter>().unwrap_err(), MpdFormatParseError::$err$((s) if s.as_str() == $s)?));
             };
         }
         assert_ok!("rawstr" => ["rawstr"]);
@@ -279,7 +427,7 @@ mod tests {
     fn format_display_test() {
         macro_rules! assert {
             ([$($item:tt),*] => $str:literal) => {
-                assert_eq!(MpdFormat(vec![$(ph!($item)),*]).to_string(), $str)
+                assert_eq!(MpdFormatter(vec![$(ph!($item)),*], "N/A".to_owned()).to_string(), $str)
             };
         }
         assert!([Artist, " - ", Title] => "{artist} - {title}");
@@ -292,7 +440,7 @@ mod tests {
     fn format_back_and_forth_test() {
         macro_rules! assert {
             ($str:literal) => {
-                assert_eq!($str.parse::<MpdFormat>().unwrap().to_string(), $str)
+                assert_eq!($str.parse::<MpdFormatter>().unwrap().to_string(), $str)
             };
         }
         assert!("rawstr");

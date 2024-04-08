@@ -1,15 +1,17 @@
 mod running_text;
 mod utils;
+mod text_source;
 #[cfg(feature = "mpd")]
 mod mpd;
-mod text_source;
 
 use std::{
     fs::{self},
     io::{self},
     path::PathBuf,
-    time::Duration, net::SocketAddr,
+    time::Duration,
 };
+#[cfg(feature = "mpd")]
+use std::net::SocketAddr;
 
 use clap::{
     arg, command, crate_description, crate_name, ArgAction, ArgGroup, ArgMatches, Command, value_parser,
@@ -17,8 +19,9 @@ use clap::{
 use text_source::TextSource;
 
 use crate::running_text::RunningText;
+
 #[cfg(feature = "mpd")]
-use crate::mpd::MpdFormat;
+use crate::mpd::{StatusIcons, StateStatusIcons, MpdFormatter};
 
 fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error> {
     RunningText::new(
@@ -29,8 +32,6 @@ fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error>
             .unwrap(),
         matches.remove_one::<String>("separator").unwrap(),
         matches.remove_one::<String>("newline").unwrap(),
-        matches.remove_one::<String>("prefix").unwrap(),
-        matches.remove_one::<String>("suffix").unwrap(),
         matches.remove_one::<bool>("dont-repeat").unwrap(),
     )
 }
@@ -57,12 +58,14 @@ fn main() -> Result<(), io::Error> {
         .subcommand_required(true)
         .subcommand(
             Command::new("run")
-                .arg(arg!(-d --duration <DURATION> "Tick duration").default_value("1s"))
+                .arg(arg!(-d --duration <DURATION> "Tick duration")
+                     .value_parser(value_parser!(humantime::Duration))
+                     .default_value("1s"))
                 .about("Run text in a terminal")
         )
         .subcommand(
             Command::new("iter")
-                .arg(arg!(<ITER_FILE> "File containing data for next iteration").value_parser(clap::value_parser!(PathBuf)))
+                .arg(arg!(<ITER_FILE> "File containing data for next iteration").value_parser(value_parser!(PathBuf)))
                 .about("Print just one iteration")
                 .arg_required_else_help(true),
         );
@@ -76,34 +79,50 @@ fn main() -> Result<(), io::Error> {
                     )
         .next_help_heading("MPD Options")
         .arg(
-            arg!(--"status-icons" <ICONS> "Status icons")
-                .value_parser(mpd::parse_player_icons)
+            arg!(--"status-icons" <ICONS> "Status icons to use")
+                .value_parser(value_parser!(StateStatusIcons))
                 .default_value(""),
         )
         .arg(
             arg!(--"repeat-icons" <ICONS> "Repeat icons to use")
-                .value_parser(mpd::parse_status_icons)
+                .value_parser(value_parser!(StatusIcons))
                 .default_value("凌稜")
                 .requires("mpd")
         )
         .arg(
+            arg!(--"consume-icons" <ICONS> "Consume icons to use")
+            .value_parser(value_parser!(StatusIcons))
+            .default_value("")
+            .requires("mpd")
+        ) 
+        .arg(
+            arg!(--"random-icons" <ICONS> "Random icons to use")
+            .value_parser(value_parser!(StatusIcons))
+            .default_value("")
+            .requires("mpd")
+        ) 
+        .arg(
+            arg!(--"single-icons" <ICONS> "Single icons to use")
+            .value_parser(value_parser!(StatusIcons))
+            .default_value("")
+            .requires("mpd")
+        ) 
+        .arg(
             arg!(--format <FORMAT> "Format string to use in running text")
-                .value_parser(value_parser!(MpdFormat))
+                .value_parser(value_parser!(MpdFormatter))
                 .default_value("{artist} - {title}")
                 .requires("mpd")
         )
         .arg(
             arg!(-L --"prefix-format" <FORMAT> "Format string to use in prefix")
-                .value_parser(value_parser!(MpdFormat))
+                .value_parser(value_parser!(MpdFormatter))
                 .conflicts_with("prefix")
-                .default_value("")
                 .requires("mpd")
         )
         .arg(
             arg!(-R --"suffix-format" <FORMAT> "Format string to use in suffix")
-                .value_parser(value_parser!(MpdFormat))
+                .value_parser(value_parser!(MpdFormatter))
                 .conflicts_with("suffix")
-                .default_value("")
                 .requires("mpd")
         );
     }
@@ -114,13 +133,8 @@ fn main() -> Result<(), io::Error> {
     match cmd.as_str() {
         "run" => {
             let duration: Duration = sub_matches
-                .remove_one::<String>("duration")
-                .map(|s| {
-                    s.parse::<humantime::Duration>()
-                        .expect("Duration parse error")
-                        .into()
-                })
-                .unwrap();
+                .remove_one::<humantime::Duration>("duration")
+                .unwrap().into();
             text.run_on_terminal(duration)?;
         }
         "iter" => {

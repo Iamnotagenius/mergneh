@@ -5,11 +5,13 @@ use std::{
 
 use ticker::Ticker;
 
-use crate::{utils::replace_newline, TextSource};
+use crate::{utils::replace_newline, TextSource, text_source::Content};
 
 pub struct RunningText {
     source: TextSource,
     content: String,
+    newline: String,
+    separator: String,
     prefix: String,
     suffix: String,
     window_size: usize,
@@ -27,11 +29,9 @@ impl RunningText {
         window_size: usize,
         mut separator: String,
         newline: String,
-        prefix: String,
-        suffix: String,
         repeat: bool,
     ) -> Result<Self, io::Error> {
-        let (mut content, _) = source.get_content();
+        let Content { running: mut content, prefix, suffix } = source.get_initial_content();
         replace_newline(&mut content, &newline);
         replace_newline(&mut separator, &newline);
         let content_len = content.len();
@@ -49,6 +49,8 @@ impl RunningText {
             },
             full_content_char_len: count + content[content_len..].chars().count(),
             content,
+            newline,
+            separator,
             prefix,
             suffix,
             window_size,
@@ -81,13 +83,42 @@ impl RunningText {
     fn does_content_fit(&self) -> bool {
         !self.repeat && self.window_size >= self.content_char_len
     }
+    fn get_new_content(&mut self) {
+        // TODO: need two bools, one for running content another for prefix/suffix
+        if !self.source.get_content(&mut self.content, &mut self.prefix, &mut self.suffix) {
+            return;
+        }
+        self.i = 0;
+        self.byte_offset = 0;
+        replace_newline(&mut self.content, &self.newline);
+        let content_len = self.content.len();
+        self.content_char_len = self.content.chars().count();
+        self.content += &self.separator;
+        self.full_content_char_len = self.content_char_len + self.separator.chars().count();
+        self.text = if self.does_content_fit() {
+            let mut full = self.prefix.clone();
+            full.push_str(&self.content[..content_len]);
+            full.push_str(&self.suffix);
+            full
+        } else {
+            String::new()
+        };
+    }
 }
 
 impl Iterator for RunningText {
     type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.get_new_content();
         if self.does_content_fit() {
+            if self.source.content_can_change() {
+                self.text.clear();
+                self.text.push_str(&self.prefix);
+                self.text.push_str(&self.content[..self.content.len() - self.separator.len()]);
+                self.text.push_str(&self.suffix);
+
+            }
             return Some(self.text.to_owned());
         }
         self.text.clear();

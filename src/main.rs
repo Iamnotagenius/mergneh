@@ -10,13 +10,13 @@ use std::{
     fs::{self},
     io::{self},
     path::PathBuf,
-    time::Duration,
+    time::Duration, ffi::OsString,
 };
 #[cfg(feature = "mpd")]
 use std::net::SocketAddr;
 
 use clap::{
-    arg, builder::ValueParser, command, crate_description, crate_name, value_parser, ArgAction, ArgGroup, ArgMatches, Command
+    arg, command, crate_description, crate_name, value_parser, ArgAction, ArgGroup, ArgMatches, Command, ValueHint
 };
 use text_source::TextSource;
 #[cfg(feature = "waybar")]
@@ -51,10 +51,14 @@ fn main() -> Result<(), io::Error> {
         .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))
         .arg(arg!(-S --string <STRING> "Use a string as contents"))
         .arg(arg!(--stdin "Pull contents from stdin (BEWARE: it loads whole input into memory just like --file)"))
+        .arg(arg!(--cmd <ARGS> ... "Execute a command and use its output as contents")
+             .value_parser(value_parser!(OsString))
+             .num_args(1..)
+             .value_terminator(";"))
         .group(
             ArgGroup::new("sources")
             .required(true)
-            .args(["SOURCE", "file", "string", "stdin"]),
+            .args(["SOURCE", "file", "string", "stdin", "cmd"]),
             )
         .subcommand_required(true)
         .subcommand(
@@ -66,7 +70,9 @@ fn main() -> Result<(), io::Error> {
         )
         .subcommand(
             Command::new("iter")
-                .arg(arg!(<ITER_FILE> "File containing data for next iteration").value_parser(value_parser!(PathBuf)))
+                .arg(arg!(<ITER_FILE> "File containing data for next iteration")
+                     .value_parser(value_parser!(PathBuf))
+                     .value_hint(ValueHint::FilePath))
                 .about("Print just one iteration")
                 .arg_required_else_help(true),
         );

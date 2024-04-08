@@ -37,7 +37,7 @@ impl Iterator for RunningTextWithTooltip {
                 &self.buffer
             }
             #[cfg(feature = "mpd")]
-            (Tooltip::Mpd(_), TextSource::String(_)) => panic!("I refuse."),
+            (Tooltip::Mpd(_), _) => panic!("I refuse."),
         };
         Some((iteration, tooltip.to_owned()))
     }

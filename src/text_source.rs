@@ -3,14 +3,15 @@ use clap::{ArgMatches, Id};
 #[cfg(feature = "mpd")]
 use std::net::SocketAddr;
 use std::{
+    ffi::{OsStr, OsString},
     fs::{self},
     io::{self},
     path::Path,
-    process::Command,
+    process::{Command, Stdio},
 };
 
 #[cfg(feature = "mpd")]
-use crate::mpd::{MpdFormatter, MpdSource, StateStatusIcons, StatusIcons, StatusIconsSet};
+use crate::mpd::{MpdFormatter, MpdSource, StatusIconsSet};
 
 #[derive(Debug, Clone)]
 pub struct Content {
@@ -20,14 +21,29 @@ pub struct Content {
 }
 
 #[derive(Debug)]
-pub struct ExecSource {
+pub struct CmdSource {
     pub cmd: Command,
     pub prefix: String,
     pub suffix: String,
     last_output: String,
 }
 
-impl ExecSource {
+impl CmdSource {
+    pub fn new<S: AsRef<OsStr>, I: IntoIterator<Item = S>>(
+        args: I,
+        prefix: String,
+        suffix: String,
+    ) -> Self {
+        let mut arg_iter = args.into_iter();
+        let mut cmd = Command::new(arg_iter.next().unwrap());
+        cmd.stdout(Stdio::piped()).args(arg_iter);
+        Self {
+            cmd,
+            prefix,
+            suffix,
+            last_output: String::new(),
+        }
+    }
     pub fn get(&mut self, content: &mut String) -> bool {
         let output = String::from_utf8(
             self.cmd
@@ -42,6 +58,7 @@ impl ExecSource {
             false
         } else {
             output.clone_into(content);
+            self.last_output = output;
             true
         }
     }
@@ -50,7 +67,7 @@ impl ExecSource {
 #[derive(Debug)]
 pub enum TextSource {
     String(Content),
-    Exec(ExecSource),
+    Cmd(CmdSource),
     #[cfg(feature = "mpd")]
     Mpd(Box<MpdSource>),
 }
@@ -66,7 +83,7 @@ impl TextSource {
     pub fn get_initial_content(&mut self) -> Content {
         match self {
             TextSource::String(c) => c.clone(),
-            TextSource::Exec(s) => {
+            TextSource::Cmd(s) => {
                 let mut output = String::new();
                 s.get(&mut output);
                 Content {
@@ -110,13 +127,13 @@ impl TextSource {
             TextSource::String(_) => false,
             #[cfg(feature = "mpd")]
             TextSource::Mpd(s) => s.get(content, prefix, suffix).expect("MPD format error"),
-            TextSource::Exec(s) => s.get(content),
+            TextSource::Cmd(s) => s.get(content),
         }
     }
     pub fn content_can_change(&self) -> bool {
         match self {
             Self::String(_) => false,
-            Self::Exec(_) => false,
+            Self::Cmd(_) => false,
             #[cfg(feature = "mpd")]
             Self::Mpd(_) => true,
         }
@@ -140,6 +157,11 @@ impl TryFrom<&mut ArgMatches> for TextSource {
             }
             "string" => TextSource::content(src.unwrap().unwrap(), prefix, suffix),
             "stdin" => TextSource::content(io::read_to_string(io::stdin())?, prefix, suffix),
+            "cmd" => TextSource::Cmd(CmdSource::new(
+                value.remove_many::<OsString>(kind.as_str()).unwrap(),
+                prefix,
+                suffix,
+            )),
             #[cfg(feature = "mpd")]
             "mpd" => TextSource::Mpd(Box::new(MpdSource::new(
                 value.try_remove_one(kind.as_str()).unwrap().unwrap(),

@@ -162,6 +162,9 @@ impl Iterator for RunningText {
 
     fn next(&mut self) -> Option<Self::Item> {
         let changes = self.get_new_content();
+        if self.content.is_empty() {
+            return None;
+        }
         if self.does_content_fit() {
             if !changes.is_empty() {
                 self.text.clear();

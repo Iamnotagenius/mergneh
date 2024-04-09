@@ -52,10 +52,7 @@ impl RunningText {
         Ok(RunningText {
             source,
             text: if !repeat && window_size >= count {
-                let mut full = prefix.clone();
-                full.push_str(&content[..content_len]);
-                full.push_str(&suffix);
-                full
+                format!("{prefix}{}{suffix}", &content[..content_len])
             } else {
                 String::new()
             },
@@ -92,7 +89,7 @@ impl RunningText {
         self.byte_offset = self
             .content
             .char_indices()
-            .nth(i % self.full_content_char_len)
+            .nth(self.i % self.full_content_char_len)
             .unwrap()
             .0;
         println!("{}", self.next().unwrap()?);
@@ -144,20 +141,21 @@ impl RunningText {
         replace_newline(&mut self.content, &self.newline);
         let content_len = self.content.len();
         self.content_char_len = self.content.chars().count();
-        self.content += &self.separator;
+        self.content.push_str(&self.separator);
         self.full_content_char_len = self.content_char_len + self.separator.chars().count();
         if self.reset_on_change {
-            self.i = 0;
-            self.byte_offset = 0;
+            (self.i, self.byte_offset) = (0, 0);
         } else {
             self.i %= self.full_content_char_len;
             self.byte_offset = self.content.char_indices().nth(self.i).unwrap().0;
         }
         self.text = if self.does_content_fit() {
-            let mut full = self.prefix.clone();
-            full.push_str(&self.content[..content_len]);
-            full.push_str(&self.suffix);
-            full
+            format!(
+                "{}{}{}",
+                self.prefix,
+                &self.content[..content_len],
+                self.suffix
+            )
         } else {
             String::new()
         };
@@ -178,16 +176,13 @@ impl Iterator for RunningText {
         }
         if self.does_content_fit() {
             if !changes.is_empty() {
-                self.text.clear();
-                self.text.push_str(&self.prefix);
-                self.text
-                    .push_str(&self.content[..self.content.len() - self.separator.len()]);
-                self.text.push_str(&self.suffix);
+                self.text = self.prefix.clone()
+                    + (&self.content[..self.content.len() - self.separator.len()])
+                    + &self.suffix;
             }
             return Some(Ok(self.text.to_owned()));
         }
-        self.text.clear();
-        self.text.push_str(&self.prefix);
+        self.text.clone_from(&self.prefix);
         self.text.extend(
             self.content[self.byte_offset..]
                 .chars()
@@ -202,8 +197,7 @@ impl Iterator for RunningText {
             remainder -= self.full_content_char_len;
         }
         self.text.extend(self.content.chars().take(remainder));
-        self.i += 1;
-        self.i %= self.full_content_char_len;
+        self.i = (self.i + 1) % self.full_content_char_len;
         self.byte_offset += &self.content[self.byte_offset..]
             .chars()
             .next()

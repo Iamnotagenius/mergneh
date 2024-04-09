@@ -293,8 +293,7 @@ impl MpdSource {
             suffix if Suffix in suffix_format;
             content if Running in running_format;
         }
-        self.current_song = song;
-        self.current_status = status;
+        (self.current_song, self.current_status) = (song, status);
         Ok(change)
     }
     pub fn running_format(&self) -> &MpdFormatter {

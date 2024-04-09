@@ -7,8 +7,8 @@ mod mpd;
 mod waybar;
 
 use std::{
-    fs::{self},
-    io::{self},
+    fs,
+    io,
     path::PathBuf,
     time::Duration, ffi::OsString,
 };

@@ -3,8 +3,7 @@ use clap::{ArgMatches, Id};
 
 use std::{
     ffi::{OsStr, OsString},
-    fs::{self},
-    io::{self},
+    fs, io,
     path::Path,
 };
 

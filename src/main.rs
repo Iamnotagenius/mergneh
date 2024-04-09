@@ -55,6 +55,7 @@ fn main() -> anyhow::Result<()> {
         .arg(arg!(--stdin "Pull contents from stdin (BEWARE: it loads whole input into memory just like --file)"))
         .arg(arg!(--cmd <ARGS> ... "Execute a command and use its output as contents (use a ';' as a terminator)")
              .value_parser(value_parser!(OsString))
+             .value_hint(ValueHint::CommandName)
              .num_args(1..)
              .value_terminator(";"))
         .group(
@@ -92,7 +93,7 @@ fn main() -> anyhow::Result<()> {
                    .args(["TOOLTIP", "tooltip-cmd"]))
             .about("Run text with custom module in waybar (JSON output)");
         #[cfg(feature = "mpd")] {
-            cmd = cmd.arg(arg!(-t --"tooltip-format" [FORMAT] "Tooltip format to use with MPD")
+            cmd = cmd.arg(arg!(-t --"tooltip-format" [FORMAT] "Tooltip format with MPD placeholder support [default: {artist} - {title}]")
                           .value_parser(value_parser!(MpdFormatter))
                           .default_missing_value("{artist} - {title}")
                           .group("tooltips"));

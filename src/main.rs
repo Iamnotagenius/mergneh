@@ -41,7 +41,7 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<RunningText> {
 fn main() -> anyhow::Result<()> {
     let mut cli = command!(crate_name!())
         .about(crate_description!())
-        .arg(arg!(-w --window <WINDOW> "Window size").value_parser(value_parser!(u64).range(1..)).default_value("6"))
+        .arg(arg!(-w --window <WINDOW> "Window size").value_parser(value_parser!(u64).range(1..)).default_value("32"))
         .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
         .arg(arg!(-n --newline <NL> "String to replace newlines with").default_value(""))
         .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
         .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))
         .arg(arg!(-S --string <STRING> "Use a string as contents"))
         .arg(arg!(--stdin "Pull contents from stdin (BEWARE: it loads whole input into memory just like --file)"))
-        .arg(arg!(--cmd <ARGS> ... "Execute a command and use its output as contents")
+        .arg(arg!(--cmd <ARGS> ... "Execute a command and use its output as contents (use a ';' as a terminator)")
              .value_parser(value_parser!(OsString))
              .num_args(1..)
              .value_terminator(";"))
@@ -181,7 +181,7 @@ fn main() -> anyhow::Result<()> {
                             .map_err(|e| anyhow::anyhow!(e).context("Failed parsing iter file"))?,
                         content.to_owned(),
                     ),
-                    _ => Err(anyhow::anyhow!("Wrong iter file format, it should be '<i> <prev_content>"))?,
+                    _ => Err(anyhow::anyhow!("Wrong iter file format, it should be '<i> <prev_content>").context("Failed parsing iter file"))?,
                 },
                 Err(e) => match e.kind() {
                     io::ErrorKind::NotFound => (0, String::new()),

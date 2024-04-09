@@ -156,16 +156,16 @@ impl Placeholder {
                 song.map(|s| s.artist.as_deref()).unwrap_or_default(),
             ),
             Placeholder::AlbumArtist => {
-                PlaceholderValue::OptionalString(tags.remove("albumartist"))
+                PlaceholderValue::OptionalString(tags.remove("AlbumArtist"))
             }
-            Placeholder::Album => PlaceholderValue::OptionalString(tags.remove("album")),
+            Placeholder::Album => PlaceholderValue::OptionalString(tags.remove("Album")),
             Placeholder::Title => PlaceholderValue::OptionalString(
                 song.map(|s| s.title.as_deref()).unwrap_or_default(),
             ),
             Placeholder::Filename => {
                 PlaceholderValue::OptionalString(song.map(|s| s.file.as_str()))
             }
-            Placeholder::Date => PlaceholderValue::OptionalString(tags.remove("date")),
+            Placeholder::Date => PlaceholderValue::OptionalString(tags.remove("Date")),
             Placeholder::Volume => PlaceholderValue::Volume(status.volume),
             Placeholder::ElapsedTime => PlaceholderValue::OptionalDuration(status.elapsed),
             Placeholder::TotalTime => PlaceholderValue::OptionalDuration(status.duration),

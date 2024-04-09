@@ -195,7 +195,7 @@ pub struct MpdFormatter(Vec<Placeholder>);
 pub enum MpdFormatParseError {
     UnknownPlaceholder(String),
     RedundantFormat(String),
-    TimeParseError(chrono::format::ParseError),
+    DurationParseError(chrono::format::ParseError),
     PadParseError(ParseIntError),
     UnmatchedParenthesis,
 }
@@ -209,8 +209,8 @@ impl Display for MpdFormatParseError {
             Self::RedundantFormat(placeholder) => {
                 write!(f, "'{placeholder}' does not have additional formatting")
             }
-            Self::TimeParseError(e) => {
-                write!(f, "Invalid time format: {e}")
+            Self::DurationParseError(e) => {
+                write!(f, "Invalid duration format: {e}")
             }
             Self::PadParseError(e) => write!(f, "Padding parse error: {e}"),
             Self::UnmatchedParenthesis => write!(f, "Unmatched '{{' or '}}"),
@@ -321,7 +321,7 @@ impl MpdFormatter {
     pub fn only_string(str: String) -> Self {
         Self(vec![Placeholder::String(str)])
     }
-    pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> std::fmt::Result {
+    pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> anyhow::Result<()> {
         self.format(
             source.icons(),
             source.current_song(),
@@ -337,15 +337,13 @@ impl MpdFormatter {
         status: &Status,
         default: &str,
         f: &mut String,
-    ) -> std::fmt::Result {
+    ) -> anyhow::Result<()> {
         for ph in self.iter() {
             match ph.get(song, status) {
-                PlaceholderValue::String(s) => write!(f, "{}", s),
-                PlaceholderValue::OptionalString(s) => write!(f, "{}", s.unwrap_or(default)),
-                PlaceholderValue::Volume(v) => {
-                    write!(f, "{}", v)
-                }
-                PlaceholderValue::Len(l) => write!(f, "{}", l),
+                PlaceholderValue::String(s) => write!(f, "{}", s)?,
+                PlaceholderValue::OptionalString(s) => write!(f, "{}", s.unwrap_or(default))?,
+                PlaceholderValue::Volume(v) => write!(f, "{}", v)?,
+                PlaceholderValue::Len(l) => write!(f, "{}", l)?,
                 PlaceholderValue::OptionalDuration(op, fmt) => match op {
                     Some(d) => write!(
                         f,
@@ -359,20 +357,18 @@ impl MpdFormatter {
                             fmt.iter()
                         )
                     )
-                    .map_err(|e| {
-                        panic!("DelayedFormat: {e}");
-                    }),
-                    None => write!(f, "{}", default),
+                    .map_err(|e| anyhow::anyhow!(e).context("Unsupported time specifier"))?,
+                    None => write!(f, "{}", default)?,
                 },
                 PlaceholderValue::OptionalQueuePlace(op) => match op {
                     Some(qp) => write!(f, "{}", qp.id),
                     None => write!(f, "{}", default),
-                },
-                PlaceholderValue::Bool(b) => icons.write_bool(ph, b, f),
+                }?,
+                PlaceholderValue::Bool(b) => icons.write_bool(ph, b, f)?,
                 PlaceholderValue::State(s, pad) => {
-                    write!(f, "{}{}", icons.state.get_icon(s), " ".repeat(pad))
+                    write!(f, "{}{}", icons.state.get_icon(s), " ".repeat(pad))?
                 }
-            }?;
+            };
         }
         Ok(())
     }
@@ -475,12 +471,12 @@ impl FromStr for MpdFormatter {
                     "elapsedTime" => Placeholder::ElapsedTime(
                         StrftimeItems::new(ph_fmt)
                             .parse_to_owned()
-                            .map_err(MpdFormatParseError::TimeParseError)?,
+                            .map_err(MpdFormatParseError::DurationParseError)?,
                     ),
                     "totalTime" => Placeholder::TotalTime(
                         StrftimeItems::new(ph_fmt)
                             .parse_to_owned()
-                            .map_err(MpdFormatParseError::TimeParseError)?,
+                            .map_err(MpdFormatParseError::DurationParseError)?,
                     ),
                     "consumeIcon" | "repeatIcon" | "stateIcon" | "singleIcon" => {
                         let pad = ph_fmt

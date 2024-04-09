@@ -9,7 +9,7 @@ Mergneh reads text from various sources and then outputs it like a running banne
 Let's start with simple examples. Here's a static running text with 300ms delay:
 ![text](https://github.com/Iamnotagenius/mergneh/assets/58214104/76451c39-0391-40e4-9c4b-543f383f735f)
 > [!NOTE]
-> Go [here](https://docs.rs/humantime/latest/humantime/fn.parse_duration.html) to see what time suffixes are supported
+> Go [here](https://docs.rs/humantime/latest/humantime/fn.parse_duration.html) to see what time suffixes are supported.
 
 Neat, aint it? Mergneh can also save state between runs in a file:
 ```ansi
@@ -48,6 +48,39 @@ Suppose we defined a module `custom/mpd`, now we only need to configure the modu
 ```
 And that's everything you need, really. Here's a demo:
 ![waybar](https://github.com/Iamnotagenius/mergneh/assets/58214104/c579972d-20a6-427b-9201-ffee547ec421)
+
+### MPD format specifiers
+As mentioned earlier, the `--format` and subsequenly `--prefix-format`, `--suffix-format`, `--tooltip-format` are compatible with waybar's format designators.
+Here's an exhaustive list of them:
+- `{albumArtist}`
+- `{album}`
+- `{artist}`
+- `{consumeIcon}`
+- `{date}`
+- `{elapsedTime}`
+- `{filename}`
+- `{queueLength}`
+- `{randomIcon}`
+- `{repeatIcon}`
+- `{singleIcon}`
+- `{songPosition}`
+- `{stateIcon}`
+- `{title}`
+- `{totalTime}`
+- `{volume}`
+
+> [!IMPORTANT]
+> The `{*Icon}` placeholders take icons from respective options.
+> The `--status-icons` option must be a 3-character long string, icons are specified in this order: play, pause, stop.
+> Other sets of icons are 1 or 2-characters long: for enabled state and other one is optional for disabled state.
+
+> [!NOTE]
+> Icon placeholders can have a padding (specified like this: `{stateIcon:1}`), this is useful when icon glyphs are too big for one character.
+
+> [!NOTE]
+> `{*Time}` placeholders can have additional formatting specified after the ':' like this: `{elapsedTime:%M min %S sec}`. (the default one is `%M:%S`)
+> For a more detailed overview of supported time specifiers go [here](https://docs.rs/chrono/latest/chrono/format/strftime/index.html).
+> Keep in mind that you can only use a limited subset of specifiers.
 
 ### A brief overview of available options
 `mg -h` should give you enough information. Anyway, here's available options:

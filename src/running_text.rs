@@ -7,7 +7,11 @@ use ticker::Ticker;
 
 #[cfg(feature = "waybar")]
 use crate::waybar::{RunningTextWithTooltip, Tooltip};
-use crate::{text_source::Content, utils::replace_newline, TextSource};
+use crate::{
+    text_source::{Content, ContentChange},
+    utils::replace_newline,
+    TextSource,
+};
 
 pub struct RunningText {
     source: TextSource,
@@ -126,14 +130,14 @@ impl RunningText {
     fn does_content_fit(&self) -> bool {
         !self.repeat && self.window_size >= self.content_char_len
     }
-    fn get_new_content(&mut self) {
-        // TODO: need two bools, one for running content another for prefix/suffix
-        if !self
-            .source
-            .get_content(&mut self.content, &mut self.prefix, &mut self.suffix)
-        {
-            return;
+    fn get_new_content(&mut self) -> ContentChange {
+        let changes =
+            self.source
+                .get_content(&mut self.content, &mut self.prefix, &mut self.suffix);
+        if !changes.contains(ContentChange::Running) {
+            return changes;
         }
+        // TODO: not always reset pos on content change
         self.i = 0;
         self.byte_offset = 0;
         replace_newline(&mut self.content, &self.newline);
@@ -149,6 +153,7 @@ impl RunningText {
         } else {
             String::new()
         };
+        changes
     }
 }
 
@@ -156,9 +161,9 @@ impl Iterator for RunningText {
     type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.get_new_content();
+        let changes = self.get_new_content();
         if self.does_content_fit() {
-            if self.source.content_can_change() {
+            if !changes.is_empty() {
                 self.text.clear();
                 self.text.push_str(&self.prefix);
                 self.text

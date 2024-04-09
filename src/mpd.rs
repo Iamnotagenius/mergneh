@@ -5,9 +5,12 @@ use std::{
     fmt::{self, Write},
     net::SocketAddr,
     str::FromStr,
+    time::Duration,
 };
 
-use mpd::{Client, Song, State, Status};
+use mpd::{song::QueuePlace, Client, Song, State, Status};
+
+use crate::text_source::ContentChange;
 
 #[derive(Debug)]
 pub enum IconSetParseError<const N: usize> {
@@ -92,6 +95,16 @@ impl StatusIconsSet {
             single: single_icons,
         }
     }
+
+    pub fn write_bool<T: Write>(&self, ph: &Placeholder, value: bool, f: &mut T) -> fmt::Result {
+        match ph {
+            Placeholder::ConsumeIcon => self.consume.write(value, f),
+            Placeholder::RandomIcon => self.random.write(value, f),
+            Placeholder::RepeatIcon => self.repeat.write(value, f),
+            Placeholder::SingleIcon => self.single.write(value, f),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -113,6 +126,58 @@ pub enum Placeholder {
     RandomIcon,
     RepeatIcon,
     SingleIcon,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum PlaceholderValue<'a> {
+    String(&'a str),
+    OptionalString(Option<&'a str>),
+    Volume(i8),
+    OptionalDuration(Option<Duration>),
+    OptionalQueuePlace(Option<QueuePlace>),
+    Len(u32),
+    Bool(bool),
+    State(State),
+}
+
+impl Placeholder {
+    pub fn get<'a>(&'a self, song: Option<&'a Song>, status: &Status) -> PlaceholderValue<'a> {
+        let mut tags: HashMap<&str, &str> = song
+            .map(|s| {
+                s.tags
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        match self {
+            Placeholder::String(s) => PlaceholderValue::String(s),
+            Placeholder::Artist => PlaceholderValue::OptionalString(
+                song.map(|s| s.artist.as_deref()).unwrap_or_default(),
+            ),
+            Placeholder::AlbumArtist => {
+                PlaceholderValue::OptionalString(tags.remove("albumartist"))
+            }
+            Placeholder::Album => PlaceholderValue::OptionalString(tags.remove("album")),
+            Placeholder::Title => PlaceholderValue::OptionalString(
+                song.map(|s| s.title.as_deref()).unwrap_or_default(),
+            ),
+            Placeholder::Filename => {
+                PlaceholderValue::OptionalString(song.map(|s| s.file.as_str()))
+            }
+            Placeholder::Date => PlaceholderValue::OptionalString(tags.remove("date")),
+            Placeholder::Volume => PlaceholderValue::Volume(status.volume),
+            Placeholder::ElapsedTime => PlaceholderValue::OptionalDuration(status.elapsed),
+            Placeholder::TotalTime => PlaceholderValue::OptionalDuration(status.duration),
+            Placeholder::SongPosition => PlaceholderValue::OptionalQueuePlace(status.song),
+            Placeholder::QueueLength => PlaceholderValue::Len(status.queue_len),
+            Placeholder::StateIcon => PlaceholderValue::State(status.state),
+            Placeholder::ConsumeIcon => PlaceholderValue::Bool(status.consume),
+            Placeholder::RandomIcon => PlaceholderValue::Bool(status.random),
+            Placeholder::RepeatIcon => PlaceholderValue::Bool(status.repeat),
+            Placeholder::SingleIcon => PlaceholderValue::Bool(status.single),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -140,7 +205,7 @@ impl Error for MpdFormatParseError {}
 pub struct MpdSource {
     client: Client,
     current_song: Option<Song>,
-    current_status: Option<Status>,
+    current_status: Status,
     running_format: MpdFormatter,
     prefix_format: MpdFormatter,
     suffix_format: MpdFormatter,
@@ -157,10 +222,11 @@ impl MpdSource {
         icons: StatusIconsSet,
         default_placeholder: String,
     ) -> Self {
+        let mut client = Client::connect(addr).expect("MPD connection error");
         Self {
-            client: Client::connect(addr).expect("MPD connection error"),
-            current_song: None,
-            current_status: None,
+            current_song: client.currentsong().expect("MPD server error"),
+            current_status: client.status().expect("MPD server error"),
+            client,
             running_format: fmt,
             prefix_format: prefix,
             suffix_format: suffix,
@@ -173,50 +239,45 @@ impl MpdSource {
         content: &mut String,
         prefix: &mut String,
         suffix: &mut String,
-    ) -> Result<bool, fmt::Error> {
+    ) -> Result<ContentChange, fmt::Error> {
         let song = self.client.currentsong().expect("MPD server error");
         let status = self.client.status().expect("MPD server error");
-        // TODO: May go iterate the formatter to inspect actual changes
-        if let Some(s) = song.as_ref() {
-            if !self.prefix_format.is_constant() {
-                prefix.clear();
-                self.prefix_format.format(
-                    &self.icons,
-                    s,
-                    &status,
-                    &self.default_placeholder,
-                    prefix,
-                )?;
-            }
-            if !self.suffix_format.is_constant() {
-                suffix.clear();
-                self.suffix_format.format(
-                    &self.icons,
-                    s,
-                    &status,
-                    &self.default_placeholder,
-                    suffix,
-                )?;
-            }
+        let mut change = ContentChange::empty();
+        // I made this because I think this looks hilarious and I don't want to repeat this
+        macro_rules! change {
+            {
+                $($var:ident if $type:ident in $fmt:ident;)*
+            } => {
+                $(
+                    change.set(
+                        ContentChange::$type,
+                        self.$fmt
+                        .iter()
+                        .any(|ph| ph.get(self.current_song(), self.current_status()) != ph.get(song.as_ref(), &status)),
+                    );
+                )*
+                $(
+                    if change.contains(ContentChange::$type) {
+                        $var.clear();
+                        self.$fmt.format(
+                            &self.icons,
+                            song.as_ref(),
+                            &status,
+                            &self.default_placeholder,
+                            $var,
+                        )?;
+                    }
+                )*
+            };
         }
-        if song == self.current_song {
-            return Ok(false);
-        }
-        content.clear();
-        if let Some(s) = song.as_ref() {
-            self.running_format.format(
-                &self.icons,
-                s,
-                &status,
-                &self.default_placeholder,
-                content,
-            )?;
-        } else {
-            write!(content, "{}", self.default_placeholder)?;
+        change! {
+            prefix if Prefix in prefix_format;
+            suffix if Suffix in suffix_format;
+            content if Running in running_format;
         }
         self.current_song = song;
-        self.current_status = Some(status);
-        Ok(true)
+        self.current_status = status;
+        Ok(change)
     }
     pub fn running_format(&self) -> &MpdFormatter {
         &self.running_format
@@ -233,8 +294,8 @@ impl MpdSource {
     pub fn current_song(&self) -> Option<&Song> {
         self.current_song.as_ref()
     }
-    pub fn current_status(&self) -> Option<&Status> {
-        self.current_status.as_ref()
+    pub fn current_status(&self) -> &Status {
+        &self.current_status
     }
 }
 
@@ -246,55 +307,40 @@ impl MpdFormatter {
         self.iter().all(|ph| matches!(ph, Placeholder::String(_)))
     }
     pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> std::fmt::Result {
-        if let (Some(song), Some(status)) = (&source.current_song, &source.current_status) {
-            self.format(&source.icons, song, status, &source.default_placeholder, f)
-        } else {
-            Ok(())
-        }
+        self.format(
+            source.icons(),
+            source.current_song(),
+            source.current_status(),
+            &source.default_placeholder,
+            f,
+        )
     }
     pub fn format(
         &self,
         icons: &StatusIconsSet,
-        song: &Song,
+        song: Option<&Song>,
         status: &Status,
         default: &str,
         f: &mut String,
     ) -> std::fmt::Result {
-        let mut tags: HashMap<&str, &str> = song
-            .tags
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
         for ph in self.iter() {
-            match ph {
-                Placeholder::String(s) => write!(f, "{}", s),
-                Placeholder::Artist => write!(f, "{}", song.artist.as_deref().unwrap_or(default)),
-                Placeholder::AlbumArtist => {
-                    write!(f, "{}", tags.remove("albumartist").unwrap_or(default))
+            match ph.get(song, status) {
+                PlaceholderValue::String(s) => write!(f, "{}", s),
+                PlaceholderValue::OptionalString(s) => write!(f, "{}", s.unwrap_or(default)),
+                PlaceholderValue::Volume(v) => {
+                    write!(f, "{}", v)
                 }
-                Placeholder::Album => write!(f, "{}", tags.remove("album").unwrap_or(default)),
-                Placeholder::Title => write!(f, "{}", song.title.as_deref().unwrap_or(default)),
-                Placeholder::Filename => write!(f, "{}", &song.file),
-                Placeholder::Date => write!(f, "{}", tags.remove("date").unwrap_or(default)),
-                Placeholder::Volume => write!(f, "{}", status.volume),
-                Placeholder::ElapsedTime => match status.elapsed {
-                    Some(e) => write!(f, "{:02}:{:02}", e.as_secs() / 60, e.as_secs() % 60),
-                    None => write!(f, "{}", default),
-                },
-                Placeholder::TotalTime => match status.duration {
+                PlaceholderValue::Len(l) => write!(f, "{}", l),
+                PlaceholderValue::OptionalDuration(op) => match op {
                     Some(d) => write!(f, "{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60),
                     None => write!(f, "{}", default),
                 },
-                Placeholder::SongPosition => {
-                    let pos = status.song.map(|p| p.pos.to_string());
-                    write!(f, "{}", pos.as_deref().unwrap_or(default))
-                }
-                Placeholder::QueueLength => write!(f, "{}", status.queue_len.to_string()),
-                Placeholder::StateIcon => write!(f, "{}", icons.state.get_icon(status.state)),
-                Placeholder::ConsumeIcon => icons.consume.write(status.consume, f),
-                Placeholder::RandomIcon => icons.random.write(status.random, f),
-                Placeholder::RepeatIcon => icons.repeat.write(status.repeat, f),
-                Placeholder::SingleIcon => icons.single.write(status.single, f),
+                PlaceholderValue::OptionalQueuePlace(op) => match op {
+                    Some(qp) => write!(f, "{}", qp.id),
+                    None => write!(f, "{}", default),
+                },
+                PlaceholderValue::Bool(b) => icons.write_bool(ph, b, f),
+                PlaceholderValue::State(s) => write!(f, "{}", icons.state.get_icon(s)),
             }?;
         }
         Ok(())

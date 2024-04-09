@@ -1,6 +1,6 @@
 use std::{
     error::Error,
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     fmt::Display,
     io,
     iter::repeat,
@@ -83,9 +83,9 @@ impl<S: AsRef<OsStr>> FromIterator<S> for Command {
     }
 }
 
-impl Into<process::Command> for Command {
-    fn into(self) -> process::Command {
-        self.0
+impl From<Command> for process::Command {
+    fn from(val: Command) -> Self {
+        val.0
     }
 }
 

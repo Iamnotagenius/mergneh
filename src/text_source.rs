@@ -1,7 +1,6 @@
+use bitflags::bitflags;
 use clap::{ArgMatches, Id};
 
-#[cfg(feature = "mpd")]
-use std::net::SocketAddr;
 use std::{
     ffi::{OsStr, OsString},
     fs::{self},
@@ -42,15 +41,24 @@ impl CmdSource {
             last_output: String::new(),
         }
     }
-    pub fn get(&mut self, content: &mut String) -> bool {
+    pub fn get(&mut self, content: &mut String) -> ContentChange {
         let output = self.cmd.spawn_and_read_output().expect("Child error");
         if self.last_output == output {
-            false
+            ContentChange::empty()
         } else {
+            content.clear();
             output.clone_into(content);
             self.last_output = output;
-            true
+            ContentChange::Running
         }
+    }
+}
+
+bitflags! {
+    pub struct ContentChange: u8 {
+        const Running = 1;
+        const Prefix = 1 << 1;
+        const Suffix = 1 << 2;
     }
 }
 
@@ -97,12 +105,15 @@ impl TextSource {
                         String::new()
                     },
                 };
-                c.get(
-                    &mut content.running,
-                    &mut content.prefix,
-                    &mut content.suffix,
-                )
-                .expect("MPD format error");
+                c.running_format()
+                    .format_with_source(c, &mut content.running)
+                    .expect("MPD format error");
+                c.prefix_format()
+                    .format_with_source(c, &mut content.prefix)
+                    .expect("MPD format error");
+                c.suffix_format()
+                    .format_with_source(c, &mut content.suffix)
+                    .expect("MPD format error");
                 content
             }
         }
@@ -112,20 +123,12 @@ impl TextSource {
         content: &mut String,
         prefix: &mut String,
         suffix: &mut String,
-    ) -> bool {
+    ) -> ContentChange {
         match self {
-            TextSource::String(_) => false,
+            TextSource::String(_) => ContentChange::empty(),
             #[cfg(feature = "mpd")]
             TextSource::Mpd(s) => s.get(content, prefix, suffix).expect("MPD format error"),
             TextSource::Cmd(s) => s.get(content),
-        }
-    }
-    pub fn content_can_change(&self) -> bool {
-        match self {
-            Self::String(_) => false,
-            Self::Cmd(_) => false,
-            #[cfg(feature = "mpd")]
-            Self::Mpd(_) => true,
         }
     }
 }

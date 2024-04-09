@@ -108,7 +108,7 @@ Options:
   -d, --duration <DURATION>  Tick duration [default: 1s]
   -h, --help                 Print help
 ```
-Options for a `iter` subcommand:
+Options for an `iter` subcommand:
 ```
 Print just one iteration
 

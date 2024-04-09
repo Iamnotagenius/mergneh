@@ -27,17 +27,18 @@ use crate::running_text::RunningText;
 #[cfg(feature = "mpd")]
 use crate::mpd::{StatusIcons, StateStatusIcons, MpdFormatter};
 
-fn text_from_matches(matches: &mut ArgMatches) -> Result<RunningText, io::Error> {
+fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<RunningText> {
     RunningText::new(
         TextSource::try_from(&mut *matches)?,
         matches.remove_one::<u64>("window").unwrap() as usize,
         matches.remove_one("separator").unwrap(),
         matches.remove_one("newline").unwrap(),
         matches.remove_one("dont-repeat").unwrap(),
+        matches.remove_one("reset-on-change").unwrap(),
     )
 }
 
-fn main() -> Result<(), io::Error> {
+fn main() -> anyhow::Result<()> {
     let mut cli = command!(crate_name!())
         .about(crate_description!())
         .arg(arg!(-w --window <WINDOW> "Window size").value_parser(value_parser!(u64).range(1..)).default_value("6"))
@@ -46,6 +47,7 @@ fn main() -> Result<(), io::Error> {
         .arg(arg!(-l --prefix <PREFIX> "String to print before running text").default_value(""))
         .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
         .arg(arg!(-'1' --"dont-repeat" "Do not repeat contents if it fits in the window size").action(ArgAction::SetFalse))
+        .arg(arg!(--"reset-on-change" "Reset text window on content change"))
         .next_help_heading("Sources")
         .arg(arg!(<SOURCE> "    Same as --file, if file with this name does not exist or is a directory, it will behave as --string"))
         .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))
@@ -176,17 +178,17 @@ fn main() -> Result<(), io::Error> {
                     Some((number, content)) => (
                         number
                             .parse::<usize>()
-                            .expect("First word in iter file should be a number"),
+                            .map_err(|e| anyhow::anyhow!(e).context("Failed parsing iter file"))?,
                         content.to_owned(),
                     ),
-                    _ => panic!("Wrong iter file format, it should be '<i> <prev_content>"),
+                    _ => Err(anyhow::anyhow!("Wrong iter file format, it should be '<i> <prev_content>"))?,
                 },
                 Err(e) => match e.kind() {
                     io::ErrorKind::NotFound => (0, String::new()),
-                    _ => return Err(e),
+                    _ => return Err(e.into()),
                 },
             };
-            let i = text.print_once(i, prev_content.as_str());
+            let i = text.print_once(i, prev_content.as_str())?;
             fs::write(iter_file, format!("{i} {}", text.get_raw_content()))?;
         }
         #[cfg(feature = "waybar")]

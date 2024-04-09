@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use mpd::{song::QueuePlace, Client, Song, State, Status};
 
 use crate::text_source::ContentChange;
@@ -221,27 +222,27 @@ impl MpdSource {
         suffix: MpdFormatter,
         icons: StatusIconsSet,
         default_placeholder: String,
-    ) -> Self {
-        let mut client = Client::connect(addr).expect("MPD connection error");
-        Self {
-            current_song: client.currentsong().expect("MPD server error"),
-            current_status: client.status().expect("MPD server error"),
+    ) -> anyhow::Result<Self> {
+        let mut client = Client::connect(addr).context("MPD connection error")?;
+        Ok(Self {
+            current_song: client.currentsong().context("MPD server error")?,
+            current_status: client.status().context("MPD server error")?,
             client,
             running_format: fmt,
             prefix_format: prefix,
             suffix_format: suffix,
             icons,
             default_placeholder,
-        }
+        })
     }
     pub fn get(
         &mut self,
         content: &mut String,
         prefix: &mut String,
         suffix: &mut String,
-    ) -> Result<ContentChange, fmt::Error> {
-        let song = self.client.currentsong().expect("MPD server error");
-        let status = self.client.status().expect("MPD server error");
+    ) -> anyhow::Result<ContentChange> {
+        let song = self.client.currentsong().context("MPD server error")?;
+        let status = self.client.status().context("MPD server error")?;
         let mut change = ContentChange::empty();
         // I made this because I think this looks hilarious and I don't want to repeat this
         macro_rules! change {

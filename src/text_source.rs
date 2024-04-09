@@ -41,15 +41,15 @@ impl CmdSource {
             last_output: String::new(),
         }
     }
-    pub fn get(&mut self, content: &mut String) -> ContentChange {
-        let output = self.cmd.spawn_and_read_output().expect("Child error");
+    pub fn get(&mut self, content: &mut String) -> anyhow::Result<ContentChange> {
+        let output = self.cmd.spawn_and_read_output()?;
         if self.last_output == output {
-            ContentChange::empty()
+            Ok(ContentChange::empty())
         } else {
             content.clear();
             output.clone_into(content);
             self.last_output = output;
-            ContentChange::Running
+            Ok(ContentChange::Running)
         }
     }
 }
@@ -78,17 +78,17 @@ impl TextSource {
             suffix,
         })
     }
-    pub fn get_initial_content(&mut self) -> Content {
+    pub fn get_initial_content(&mut self) -> anyhow::Result<Content> {
         match self {
-            TextSource::String(c) => c.clone(),
+            TextSource::String(c) => Ok(c.clone()),
             TextSource::Cmd(s) => {
                 let mut output = String::new();
-                s.get(&mut output);
-                Content {
+                s.get(&mut output)?;
+                Ok(Content {
                     running: output,
                     prefix: s.prefix.clone(),
                     suffix: s.suffix.clone(),
-                }
+                })
             }
             #[cfg(feature = "mpd")]
             TextSource::Mpd(c) => {
@@ -106,15 +106,12 @@ impl TextSource {
                     },
                 };
                 c.running_format()
-                    .format_with_source(c, &mut content.running)
-                    .expect("MPD format error");
+                    .format_with_source(c, &mut content.running)?;
                 c.prefix_format()
-                    .format_with_source(c, &mut content.prefix)
-                    .expect("MPD format error");
+                    .format_with_source(c, &mut content.prefix)?;
                 c.suffix_format()
-                    .format_with_source(c, &mut content.suffix)
-                    .expect("MPD format error");
-                content
+                    .format_with_source(c, &mut content.suffix)?;
+                Ok(content)
             }
         }
     }
@@ -123,20 +120,20 @@ impl TextSource {
         content: &mut String,
         prefix: &mut String,
         suffix: &mut String,
-    ) -> ContentChange {
+    ) -> anyhow::Result<ContentChange> {
         match self {
-            TextSource::String(_) => ContentChange::empty(),
+            TextSource::String(_) => Ok(ContentChange::empty()),
             #[cfg(feature = "mpd")]
-            TextSource::Mpd(s) => s.get(content, prefix, suffix).expect("MPD format error"),
+            TextSource::Mpd(s) => s.get(content, prefix, suffix),
             TextSource::Cmd(s) => s.get(content),
         }
     }
 }
 
 impl TryFrom<&mut ArgMatches> for TextSource {
-    type Error = io::Error;
+    type Error = anyhow::Error;
 
-    fn try_from(value: &mut ArgMatches) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut ArgMatches) -> anyhow::Result<Self, Self::Error> {
         let kind = value.remove_one::<Id>("sources").unwrap();
         let src = value.try_remove_one::<String>(kind.as_str());
         let prefix = value.remove_one::<String>("prefix").unwrap();
@@ -173,7 +170,7 @@ impl TryFrom<&mut ArgMatches> for TextSource {
                     value.remove_one("single-icons").unwrap(),
                 ),
                 value.remove_one("default-placeholder").unwrap(),
-            ))),
+            )?)),
             _ => unreachable!(),
         });
     }

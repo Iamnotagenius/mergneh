@@ -22,6 +22,7 @@ pub struct RunningText {
     suffix: String,
     window_size: usize,
     repeat: bool,
+    reset_on_change: bool,
     text: String,
     full_content_char_len: usize,
     content_char_len: usize,
@@ -36,12 +37,13 @@ impl RunningText {
         mut separator: String,
         newline: String,
         repeat: bool,
-    ) -> Result<Self, io::Error> {
+        reset_on_change: bool,
+    ) -> anyhow::Result<Self> {
         let Content {
             running: mut content,
             prefix,
             suffix,
-        } = source.get_initial_content();
+        } = source.get_initial_content()?;
         replace_newline(&mut content, &newline);
         replace_newline(&mut separator, &newline);
         let content_len = content.len();
@@ -65,6 +67,7 @@ impl RunningText {
             suffix,
             window_size,
             repeat,
+            reset_on_change,
             content_char_len: count,
             i: 0,
             byte_offset: 0,
@@ -73,15 +76,15 @@ impl RunningText {
     pub fn get_raw_content(&self) -> &str {
         &self.content
     }
-    pub fn run_on_terminal(self, duration: Duration) -> io::Result<()> {
+    pub fn run_on_terminal(self, duration: Duration) -> anyhow::Result<()> {
         let tick = Ticker::new(self, duration);
         for text in tick {
-            print!("\r{}", text);
+            print!("\r{}", text?);
             io::stdout().flush()?;
         }
         Ok(())
     }
-    pub fn print_once(&mut self, mut i: usize, prev_content: &str) -> usize {
+    pub fn print_once(&mut self, mut i: usize, prev_content: &str) -> anyhow::Result<usize> {
         if prev_content != self.content {
             i = 0;
         }
@@ -92,32 +95,32 @@ impl RunningText {
             .nth(i % self.full_content_char_len)
             .unwrap()
             .0;
-        println!("{}", self.next().unwrap());
-        self.i
+        println!("{}", self.next().unwrap()?);
+        Ok(self.i)
     }
     #[cfg(feature = "waybar")]
     pub fn with_tooltip(self, tooltip: Tooltip) -> RunningTextWithTooltip {
         RunningTextWithTooltip::new(self, tooltip)
     }
     #[cfg(feature = "waybar")]
-    pub fn run_in_waybar(self, duration: Duration, tooltip: Option<Tooltip>) -> io::Result<()> {
+    pub fn run_in_waybar(self, duration: Duration, tooltip: Option<Tooltip>) -> anyhow::Result<()> {
         match tooltip {
             Some(Tooltip::Simple(s)) => {
                 let tick = Ticker::new(self, duration);
                 for text in tick {
-                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text, s);
+                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text?, s);
                 }
             }
             Some(t) => {
                 let tick = Ticker::new(self.with_tooltip(t), duration);
                 for (text, tt) in tick {
-                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text, tt);
+                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text?, tt);
                 }
             }
             None => {
                 let tick = Ticker::new(self, duration);
                 for text in tick {
-                    println!("{{\"text\":\"{}\"}}", text);
+                    println!("{{\"text\":\"{}\"}}", text?);
                 }
             }
         };
@@ -130,21 +133,26 @@ impl RunningText {
     fn does_content_fit(&self) -> bool {
         !self.repeat && self.window_size >= self.content_char_len
     }
-    fn get_new_content(&mut self) -> ContentChange {
+    fn get_new_content(&mut self) -> anyhow::Result<ContentChange> {
         let changes =
             self.source
-                .get_content(&mut self.content, &mut self.prefix, &mut self.suffix);
+                .get_content(&mut self.content, &mut self.prefix, &mut self.suffix)?;
         if !changes.contains(ContentChange::Running) {
-            return changes;
+            return Ok(changes);
         }
         // TODO: not always reset pos on content change
-        self.i = 0;
-        self.byte_offset = 0;
         replace_newline(&mut self.content, &self.newline);
         let content_len = self.content.len();
         self.content_char_len = self.content.chars().count();
         self.content += &self.separator;
         self.full_content_char_len = self.content_char_len + self.separator.chars().count();
+        if self.reset_on_change {
+            self.i = 0;
+            self.byte_offset = 0;
+        } else {
+            self.i %= self.full_content_char_len;
+            self.byte_offset = self.content.char_indices().nth(self.i).unwrap().0;
+        }
         self.text = if self.does_content_fit() {
             let mut full = self.prefix.clone();
             full.push_str(&self.content[..content_len]);
@@ -153,15 +161,18 @@ impl RunningText {
         } else {
             String::new()
         };
-        changes
+        Ok(changes)
     }
 }
 
 impl Iterator for RunningText {
-    type Item = String;
+    type Item = anyhow::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let changes = self.get_new_content();
+        let changes = match self.get_new_content() {
+            Ok(c) => c,
+            Err(e) => return Some(Err(e)),
+        };
         if self.content.is_empty() {
             return None;
         }
@@ -173,7 +184,7 @@ impl Iterator for RunningText {
                     .push_str(&self.content[..self.content.len() - self.separator.len()]);
                 self.text.push_str(&self.suffix);
             }
-            return Some(self.text.to_owned());
+            return Some(Ok(self.text.to_owned()));
         }
         self.text.clear();
         self.text.push_str(&self.prefix);
@@ -200,6 +211,6 @@ impl Iterator for RunningText {
             .unwrap_or_default();
         self.byte_offset %= self.content.len();
         self.text.push_str(&self.suffix);
-        Some(self.text.clone())
+        Some(Ok(self.text.clone()))
     }
 }

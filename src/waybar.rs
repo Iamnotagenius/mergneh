@@ -2,6 +2,7 @@ use crate::utils::Command;
 
 #[cfg(feature = "mpd")]
 use crate::mpd::MpdFormatter;
+#[cfg(feature = "mpd")]
 use crate::text_source::TextSource;
 
 use super::RunningText;
@@ -30,7 +31,7 @@ impl RunningTextWithTooltip {
 }
 
 impl Iterator for RunningTextWithTooltip {
-    type Item = (String, String);
+    type Item = (anyhow::Result<String>, String);
 
     fn next(&mut self) -> Option<Self::Item> {
         let iteration = self.text.next().unwrap();

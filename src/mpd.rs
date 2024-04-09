@@ -4,11 +4,16 @@ use std::{
     fmt::Display,
     fmt::{self, Write},
     net::SocketAddr,
+    num::ParseIntError,
     str::FromStr,
     time::Duration,
 };
 
 use anyhow::Context;
+use chrono::{
+    format::{Item, StrftimeItems},
+    NaiveTime,
+};
 use mpd::{song::QueuePlace, Client, Song, State, Status};
 
 use crate::text_source::ContentChange;
@@ -62,9 +67,9 @@ impl StatusIcons {
         }
     }
 
-    pub fn write<T: Write>(&self, state: bool, f: &mut T) -> std::fmt::Result {
+    pub fn write<T: Write>(&self, state: bool, pad: usize, f: &mut T) -> std::fmt::Result {
         if let Some(c) = self.get_icon(state) {
-            write!(f, "{}", c)
+            write!(f, "{}{}", c, " ".repeat(pad))
         } else {
             Ok(())
         }
@@ -99,10 +104,10 @@ impl StatusIconsSet {
 
     pub fn write_bool<T: Write>(&self, ph: &Placeholder, value: bool, f: &mut T) -> fmt::Result {
         match ph {
-            Placeholder::ConsumeIcon => self.consume.write(value, f),
-            Placeholder::RandomIcon => self.random.write(value, f),
-            Placeholder::RepeatIcon => self.repeat.write(value, f),
-            Placeholder::SingleIcon => self.single.write(value, f),
+            Placeholder::ConsumeIcon(pad) => self.consume.write(value, *pad, f),
+            Placeholder::RandomIcon(pad) => self.random.write(value, *pad, f),
+            Placeholder::RepeatIcon(pad) => self.repeat.write(value, *pad, f),
+            Placeholder::SingleIcon(pad) => self.single.write(value, *pad, f),
             _ => Ok(()),
         }
     }
@@ -117,16 +122,16 @@ pub enum Placeholder {
     Title,
     Filename,
     Date,
+    TotalTime(Vec<Item<'static>>),
+    ElapsedTime(Vec<Item<'static>>),
     Volume,
-    ElapsedTime,
-    TotalTime,
     SongPosition,
     QueueLength,
-    StateIcon,
-    ConsumeIcon,
-    RandomIcon,
-    RepeatIcon,
-    SingleIcon,
+    StateIcon(usize),
+    ConsumeIcon(usize),
+    RandomIcon(usize),
+    RepeatIcon(usize),
+    SingleIcon(usize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -134,11 +139,11 @@ pub enum PlaceholderValue<'a> {
     String(&'a str),
     OptionalString(Option<&'a str>),
     Volume(i8),
-    OptionalDuration(Option<Duration>),
+    OptionalDuration(Option<Duration>, &'a Vec<Item<'static>>),
     OptionalQueuePlace(Option<QueuePlace>),
     Len(u32),
     Bool(bool),
-    State(State),
+    State(State, usize),
 }
 
 impl Placeholder {
@@ -168,15 +173,17 @@ impl Placeholder {
             }
             Placeholder::Date => PlaceholderValue::OptionalString(tags.remove("Date")),
             Placeholder::Volume => PlaceholderValue::Volume(status.volume),
-            Placeholder::ElapsedTime => PlaceholderValue::OptionalDuration(status.elapsed),
-            Placeholder::TotalTime => PlaceholderValue::OptionalDuration(status.duration),
+            Placeholder::ElapsedTime(fmt) => {
+                PlaceholderValue::OptionalDuration(status.elapsed, fmt)
+            }
+            Placeholder::TotalTime(fmt) => PlaceholderValue::OptionalDuration(status.duration, fmt),
             Placeholder::SongPosition => PlaceholderValue::OptionalQueuePlace(status.song),
             Placeholder::QueueLength => PlaceholderValue::Len(status.queue_len),
-            Placeholder::StateIcon => PlaceholderValue::State(status.state),
-            Placeholder::ConsumeIcon => PlaceholderValue::Bool(status.consume),
-            Placeholder::RandomIcon => PlaceholderValue::Bool(status.random),
-            Placeholder::RepeatIcon => PlaceholderValue::Bool(status.repeat),
-            Placeholder::SingleIcon => PlaceholderValue::Bool(status.single),
+            Placeholder::StateIcon(pad) => PlaceholderValue::State(status.state, *pad),
+            Placeholder::ConsumeIcon(_) => PlaceholderValue::Bool(status.consume),
+            Placeholder::RandomIcon(_) => PlaceholderValue::Bool(status.random),
+            Placeholder::RepeatIcon(_) => PlaceholderValue::Bool(status.repeat),
+            Placeholder::SingleIcon(_) => PlaceholderValue::Bool(status.single),
         }
     }
 }
@@ -187,16 +194,26 @@ pub struct MpdFormatter(Vec<Placeholder>);
 #[derive(Debug)]
 pub enum MpdFormatParseError {
     UnknownPlaceholder(String),
+    RedundantFormat(String),
+    TimeParseError(chrono::format::ParseError),
+    PadParseError(ParseIntError),
     UnmatchedParenthesis,
 }
 
 impl Display for MpdFormatParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MpdFormatParseError::UnknownPlaceholder(placeholder) => {
+            Self::UnknownPlaceholder(placeholder) => {
                 write!(f, "Unknown placeholder '{placeholder}'")
             }
-            MpdFormatParseError::UnmatchedParenthesis => write!(f, "Unmatched '{{' or '}}"),
+            Self::RedundantFormat(placeholder) => {
+                write!(f, "'{placeholder}' does not have additional formatting")
+            }
+            Self::TimeParseError(e) => {
+                write!(f, "Invalid time format: {e}")
+            }
+            Self::PadParseError(e) => write!(f, "Padding parse error: {e}"),
+            Self::UnmatchedParenthesis => write!(f, "Unmatched '{{' or '}}"),
         }
     }
 }
@@ -304,9 +321,6 @@ impl MpdFormatter {
     pub fn only_string(str: String) -> Self {
         Self(vec![Placeholder::String(str)])
     }
-    pub fn is_constant(&self) -> bool {
-        self.iter().all(|ph| matches!(ph, Placeholder::String(_)))
-    }
     pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> std::fmt::Result {
         self.format(
             source.icons(),
@@ -332,8 +346,22 @@ impl MpdFormatter {
                     write!(f, "{}", v)
                 }
                 PlaceholderValue::Len(l) => write!(f, "{}", l),
-                PlaceholderValue::OptionalDuration(op) => match op {
-                    Some(d) => write!(f, "{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60),
+                PlaceholderValue::OptionalDuration(op, fmt) => match op {
+                    Some(d) => write!(
+                        f,
+                        "{}",
+                        chrono::format::DelayedFormat::new(
+                            None,
+                            NaiveTime::from_num_seconds_from_midnight_opt(
+                                d.as_secs() as _,
+                                d.subsec_nanos() as _
+                            ),
+                            fmt.iter()
+                        )
+                    )
+                    .map_err(|e| {
+                        panic!("DelayedFormat: {e}");
+                    }),
                     None => write!(f, "{}", default),
                 },
                 PlaceholderValue::OptionalQueuePlace(op) => match op {
@@ -341,7 +369,9 @@ impl MpdFormatter {
                     None => write!(f, "{}", default),
                 },
                 PlaceholderValue::Bool(b) => icons.write_bool(ph, b, f),
-                PlaceholderValue::State(s) => write!(f, "{}", icons.state.get_icon(s)),
+                PlaceholderValue::State(s, pad) => {
+                    write!(f, "{}{}", icons.state.get_icon(s), " ".repeat(pad))
+                }
             }?;
         }
         Ok(())
@@ -371,18 +401,18 @@ impl Display for MpdFormatter {
                         Placeholder::Album => "{album}",
                         Placeholder::AlbumArtist => "{albumArtist}",
                         Placeholder::Artist => "{artist}",
-                        Placeholder::ConsumeIcon => "{consumeIcon}",
+                        Placeholder::ConsumeIcon(_) => "{consumeIcon}",
                         Placeholder::Date => "{date}",
-                        Placeholder::ElapsedTime => "{elapsedTime}",
+                        Placeholder::ElapsedTime(_) => "{elapsedTime}",
                         Placeholder::Filename => "{filename}",
                         Placeholder::QueueLength => "{queueLength}",
-                        Placeholder::RandomIcon => "{randomIcon}",
-                        Placeholder::RepeatIcon => "{repeatIcon}",
-                        Placeholder::SingleIcon => "{singleIcon}",
+                        Placeholder::RandomIcon(_) => "{randomIcon}",
+                        Placeholder::RepeatIcon(_) => "{repeatIcon}",
+                        Placeholder::SingleIcon(_) => "{singleIcon}",
                         Placeholder::SongPosition => "{songPosition}",
-                        Placeholder::StateIcon => "{stateIcon}",
+                        Placeholder::StateIcon(_) => "{stateIcon}",
                         Placeholder::Title => "{title}",
-                        Placeholder::TotalTime => "{totalTime}",
+                        Placeholder::TotalTime(_) => "{totalTime}",
                         Placeholder::Volume => "{volume}",
                         Placeholder::String(_) => unreachable!(),
                     }
@@ -438,27 +468,61 @@ impl FromStr for MpdFormatter {
             if let Some('{') = parse_slice[right_par..].chars().next() {
                 return Err(MpdFormatParseError::UnmatchedParenthesis);
             }
-            placeholders.push(match &parse_slice[..right_par] {
-                "album" => Placeholder::Album,
-                "albumArtist" => Placeholder::AlbumArtist,
-                "artist" => Placeholder::Artist,
-                "consumeIcon" => Placeholder::ConsumeIcon,
-                "date" => Placeholder::Date,
-                "elapsedTime" => Placeholder::ElapsedTime,
-                "filename" => Placeholder::Filename,
-                "queueLength" => Placeholder::QueueLength,
-                "randomIcon" => Placeholder::RandomIcon,
-                "repeatIcon" => Placeholder::RepeatIcon,
-                "singleIcon" => Placeholder::SingleIcon,
-                "songPosition" => Placeholder::SongPosition,
-                "stateIcon" => Placeholder::StateIcon,
-                "title" => Placeholder::Title,
-                "totalTime" => Placeholder::TotalTime,
-                "volume" => Placeholder::Volume,
-                _ => {
-                    return Err(MpdFormatParseError::UnknownPlaceholder(
-                        parse_slice[..right_par].to_owned(),
-                    ))
+            let ph_spec = &parse_slice[..right_par];
+            placeholders.push(if let Some((ph_type, ph_fmt)) = ph_spec.split_once(':') {
+                match ph_type {
+                    "date" => Placeholder::Date,
+                    "elapsedTime" => Placeholder::ElapsedTime(
+                        StrftimeItems::new(ph_fmt)
+                            .parse_to_owned()
+                            .map_err(MpdFormatParseError::TimeParseError)?,
+                    ),
+                    "totalTime" => Placeholder::TotalTime(
+                        StrftimeItems::new(ph_fmt)
+                            .parse_to_owned()
+                            .map_err(MpdFormatParseError::TimeParseError)?,
+                    ),
+                    "consumeIcon" | "repeatIcon" | "stateIcon" | "singleIcon" => {
+                        let pad = ph_fmt
+                            .parse::<usize>()
+                            .map_err(MpdFormatParseError::PadParseError)?;
+                        match ph_type {
+                            "consumeIcon" => Placeholder::ConsumeIcon(pad),
+                            "repeatIcon" => Placeholder::RepeatIcon(pad),
+                            "stateIcon" => Placeholder::StateIcon(pad),
+                            "singleIcon" => Placeholder::SingleIcon(pad),
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => return Err(MpdFormatParseError::RedundantFormat(ph_type.to_owned())),
+                }
+            } else {
+                match ph_spec {
+                    "album" => Placeholder::Album,
+                    "albumArtist" => Placeholder::AlbumArtist,
+                    "artist" => Placeholder::Artist,
+                    "consumeIcon" => Placeholder::ConsumeIcon(0),
+                    "date" => Placeholder::Date,
+                    "elapsedTime" => Placeholder::ElapsedTime(
+                        StrftimeItems::new("%M:%S").parse_to_owned().unwrap(),
+                    ),
+                    "filename" => Placeholder::Filename,
+                    "queueLength" => Placeholder::QueueLength,
+                    "randomIcon" => Placeholder::RandomIcon(0),
+                    "repeatIcon" => Placeholder::RepeatIcon(0),
+                    "singleIcon" => Placeholder::SingleIcon(0),
+                    "songPosition" => Placeholder::SongPosition,
+                    "stateIcon" => Placeholder::StateIcon(0),
+                    "title" => Placeholder::Title,
+                    "totalTime" => Placeholder::TotalTime(
+                        StrftimeItems::new("%M:%S").parse_to_owned().unwrap(),
+                    ),
+                    "volume" => Placeholder::Volume,
+                    _ => {
+                        return Err(MpdFormatParseError::UnknownPlaceholder(
+                            parse_slice[..right_par].to_owned(),
+                        ))
+                    }
                 }
             });
             parse_slice = &parse_slice[right_par + 1..];
@@ -510,9 +574,16 @@ impl FromStr for StatusIcons {
 #[cfg(test)]
 mod tests {
     use crate::mpd::{MpdFormatParseError, MpdFormatter, Placeholder};
+    use chrono::format::StrftimeItems;
     macro_rules! ph {
         ($p:ident) => {
             Placeholder::$p
+        };
+        ($p:ident(#$v:literal)) => {
+            Placeholder::$p($v)
+        };
+        ($p:ident(*$v:literal)) => {
+            Placeholder::$p(StrftimeItems::new($v).parse_to_owned().unwrap())
         };
         ($str:literal) => {
             Placeholder::String($str.to_owned())
@@ -521,8 +592,8 @@ mod tests {
     #[test]
     fn format_parse_test() {
         macro_rules! assert_ok {
-            ($str:literal => [$($item:tt),*]) => {
-                assert_eq!($str.parse::<MpdFormatter>().unwrap().0, vec![$(ph!($item)),*])
+            ($str:literal => [$($item:tt$(($h:tt$time:literal))?),*]) => {
+                assert_eq!($str.parse::<MpdFormatter>().unwrap().0, vec![$(ph!($item$(($h$time))?)),*])
             };
         }
         macro_rules! assert_err {
@@ -533,6 +604,11 @@ mod tests {
         assert_ok!("rawstr" => ["rawstr"]);
         assert_ok!("" => []);
         assert_ok!("{artist} - {title}" => [Artist, " - ", Title]);
+        assert_ok!(" [{elapsedTime}/{totalTime}] {stateIcon}" => [" [", ElapsedTime(*"%M:%S"), "/", TotalTime(*"%M:%S"), "] ", StateIcon(#0)]);
+        assert_ok!(
+            " [{elapsedTime:%M with %S}/{totalTime:%H hours %M minutes %S seconds}] {stateIcon:1}"
+            => [" [", ElapsedTime(*"%M with %S"), "/", TotalTime(*"%H hours %M minutes %S seconds"), "] ", StateIcon(#1)]
+        );
         assert_ok!("{{}}" => ["{}"]);
         assert_ok!("{{{artist}}}" => ["{", Artist, "}"]);
         assert_ok!("{{{artist}{title}}}" => ["{", Artist, Title, "}"]);

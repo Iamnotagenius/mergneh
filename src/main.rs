@@ -102,12 +102,12 @@ fn main() -> anyhow::Result<()> {
     }
     #[cfg(feature = "mpd")] {
         cli = cli
-            .arg(
-                arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
-                      .group("sources")
-                      .value_parser(value_parser!(SocketAddr))
-                      .default_missing_value("127.0.0.0:6600")
-                    )
+        .arg(
+            arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
+                .group("sources")
+                .value_parser(value_parser!(SocketAddr))
+                .default_missing_value("127.0.0.0:6600")
+        )
         .next_help_heading("MPD Options")
         .arg(
             arg!(--"status-icons" <ICONS> "Status icons to use")

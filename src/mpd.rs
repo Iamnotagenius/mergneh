@@ -478,7 +478,7 @@ impl FromStr for MpdFormatter {
                             .parse_to_owned()
                             .map_err(MpdFormatParseError::DurationParseError)?,
                     ),
-                    "consumeIcon" | "repeatIcon" | "stateIcon" | "singleIcon" => {
+                    "consumeIcon" | "repeatIcon" | "stateIcon" | "singleIcon" | "randomIcon" => {
                         let pad = ph_fmt
                             .parse::<usize>()
                             .map_err(MpdFormatParseError::PadParseError)?;
@@ -487,6 +487,7 @@ impl FromStr for MpdFormatter {
                             "repeatIcon" => Placeholder::RepeatIcon(pad),
                             "stateIcon" => Placeholder::StateIcon(pad),
                             "singleIcon" => Placeholder::SingleIcon(pad),
+                            "randomIcon" => Placeholder::RandomIcon(pad),
                             _ => unreachable!(),
                         }
                     }

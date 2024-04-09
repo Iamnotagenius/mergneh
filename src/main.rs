@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
         .arg(
             arg!(--"repeat-icons" <ICONS> "Repeat icons to use")
                 .value_parser(value_parser!(StatusIcons))
-                .default_value("凌稜")
+                .default_value("")
                 .requires("mpd")
         )
         .arg(
@@ -129,7 +129,7 @@ fn main() -> anyhow::Result<()> {
         .arg(
             arg!(--"random-icons" <ICONS> "Random icons to use")
             .value_parser(value_parser!(StatusIcons))
-            .default_value("")
+            .default_value("")
             .requires("mpd")
         ) 
         .arg(

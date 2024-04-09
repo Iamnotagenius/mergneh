@@ -94,16 +94,8 @@ impl TextSource {
             TextSource::Mpd(c) => {
                 let mut content = Content {
                     running: String::new(),
-                    prefix: if c.prefix_format().is_constant() {
-                        c.prefix_format().to_string()
-                    } else {
-                        String::new()
-                    },
-                    suffix: if c.suffix_format().is_constant() {
-                        c.suffix_format().to_string()
-                    } else {
-                        String::new()
-                    },
+                    prefix: String::new(),
+                    suffix: String::new(),
                 };
                 c.running_format()
                     .format_with_source(c, &mut content.running)?;

@@ -32,17 +32,15 @@ If you want to, you can use a command to make running text dynamic:
 
 You can compile it with mpd support, then it would be able to connect to mpd daemon and read its status:
 ![mpd](https://github.com/Iamnotagenius/mergneh/assets/58214104/05cc8e92-8fdb-43da-85c2-5a356b50f11b)
-> [!NOTE]
-> Format placeholders are fully compatible with [Waybar's ones](https://github.com/Alexays/Waybar/wiki/Module:-MPD#format-replacements).
 
-Fortunately, the program also supports streaming running text continuously in waybar's custom module (also under a feature flag).
+Here's an example with waybar.
 Suppose we defined a module `custom/mpd`, now we only need to configure the module like this:
 ```json
 "custom/mpd": {
     "on-click": "mpc toggle > /dev/null",
     "on-scroll-up": "mpc volume +5",
     "on-scroll-down": "mpc volume -5",
-    "exec": "mg --mpd -l \" \" -R \" [{elapsedTime}/{totalTime}] {stateIcon}\" -w 30 --separator \"  \" --dont-repeat waybar -d 100ms -t",
+    "exec": "mg --mpd -l \"{\\\"text\\\":\\\" \" -R \" [{elapsedTime}/{totalTime}] {stateIcon}\\\",\\\"tooltip\\\":\\\"{artist} - {title}: [{album} ({date})] ({randomIcon:1}{repeatIcon:1}{singleIcon:1}{consumeIcon:1}) {{{songPosition}/{queueLength}}}\\\"}}\" -w 30 -s \"  \" -1 run -d 100ms -n",
     "return-type": "json"
 }
 ```
@@ -50,8 +48,7 @@ And that's everything you need, really. Here's a demo:
 ![waybar](https://github.com/Iamnotagenius/mergneh/assets/58214104/c579972d-20a6-427b-9201-ffee547ec421)
 
 ### MPD format specifiers
-As mentioned earlier, the `--format` and subsequenly `--prefix-format`, `--suffix-format`, `--tooltip-format` are compatible with waybar's format designators.
-Here's an exhaustive list of them:
+The `--format` and subsequenly `--prefix-format`, `--suffix-format` support following format designators:
 - `{albumArtist}`
 - `{album}`
 - `{artist}`
@@ -114,11 +111,11 @@ MPD Options:
       --status-icons <ICONS>
           Status icons to use [default: ]
       --repeat-icons <ICONS>
-          Repeat icons to use [default: 凌稜]
+          Repeat icons to use [default: ]
       --consume-icons <ICONS>
           Consume icons to use [default: ]
       --random-icons <ICONS>
-          Random icons to use [default: ]
+          Random icons to use [default: ]
       --single-icons <ICONS>
           Single icons to use [default: ]
       --format <FORMAT>
@@ -135,10 +132,11 @@ Options for a `run` subcommand:
 ```
 Run text in a terminal
 
-Usage: mg <SOURCE|--file <FILE>|--string <STRING>|--stdin|--cmd <ARGS>...|--mpd [<SERVER_ADDR>]> run [OPTIONS]
+Usage: mg <SOURCE|--file <FILE>|--string <STRING>|--stdin|--cmd <ARGS>...> run [OPTIONS]
 
 Options:
   -d, --duration <DURATION>  Tick duration [default: 1s]
+  -n, --newline              Print each iteration on next line
   -h, --help                 Print help
 ```
 Options for an `iter` subcommand:
@@ -152,19 +150,4 @@ Arguments:
 
 Options:
   -h, --help  Print help
-```
-Options for a `waybar` subcommand:
-```
-Run text with custom module in waybar (JSON output)
-
-Usage: mg <SOURCE|--file <FILE>|--string <STRING>|--stdin|--cmd <ARGS>...|--mpd [<SERVER_ADDR>]> waybar [OPTIONS] [TOOLTIP]
-
-Arguments:
-  [TOOLTIP]  Tooltip to show on hover
-
-Options:
-  -d, --duration <DURATION>        Tick duration [default: 1s]
-      --tooltip-cmd <ARGS>...      Use output of a command for tooltip
-  -t, --tooltip-format [<FORMAT>]  Tooltip format with MPD placeholder support [default: {artist} - {title}]
-  -h, --help                       Print help
 ```

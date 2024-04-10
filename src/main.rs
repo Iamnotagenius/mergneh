@@ -35,7 +35,8 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<RunningText> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut cli = command!(crate_name!())
+    // TODO: support for multiple running texts (like each one has its own source etc)
+    let cli = command!(crate_name!())
         .about(crate_description!())
         .arg(arg!(-w --window <WINDOW> "Window size").value_parser(value_parser!(u64).range(1..)).default_value("32"))
         .arg(arg!(-s --separator <SEP> "String to print between content").default_value(""))
@@ -76,25 +77,25 @@ fn main() -> anyhow::Result<()> {
                 .about("Print just one iteration")
                 .arg_required_else_help(true),
         );
-    #[cfg(feature = "mpd")] {
-        cli = cli
+    #[cfg(feature = "mpd")] 
+    let cli = cli
         .arg(
             arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
-                .group("sources")
-                .value_parser(value_parser!(SocketAddr))
-                .default_missing_value("127.0.0.0:6600")
+            .group("sources")
+            .value_parser(value_parser!(SocketAddr))
+            .default_missing_value("127.0.0.0:6600")
         )
         .next_help_heading("MPD Options")
         .arg(
             arg!(--"status-icons" <ICONS> "Status icons to use")
-                .value_parser(value_parser!(StateStatusIcons))
-                .default_value(""),
+            .value_parser(value_parser!(StateStatusIcons))
+            .default_value(""),
         )
         .arg(
             arg!(--"repeat-icons" <ICONS> "Repeat icons to use")
-                .value_parser(value_parser!(StatusIcons))
-                .default_value("")
-                .requires("mpd")
+            .value_parser(value_parser!(StatusIcons))
+            .default_value("")
+            .requires("mpd")
         )
         .arg(
             arg!(--"consume-icons" <ICONS> "Consume icons to use")
@@ -116,28 +117,28 @@ fn main() -> anyhow::Result<()> {
         ) 
         .arg(
             arg!(--format <FORMAT> "Format string to use in running text")
-                .value_parser(value_parser!(MpdFormatter))
-                .default_value("{artist} - {title}")
-                .requires("mpd")
+            .value_parser(value_parser!(MpdFormatter))
+            .default_value("{artist} - {title}")
+            .requires("mpd")
         )
         .arg(
             arg!(-L --"prefix-format" <FORMAT> "Format string to use in prefix")
-                .value_parser(value_parser!(MpdFormatter))
-                .conflicts_with("prefix")
-                .requires("mpd")
+            .value_parser(value_parser!(MpdFormatter))
+            .conflicts_with("prefix")
+            .requires("mpd")
         )
         .arg(
             arg!(-R --"suffix-format" <FORMAT> "Format string to use in suffix")
-                .value_parser(value_parser!(MpdFormatter))
-                .conflicts_with("suffix")
-                .requires("mpd")
+            .value_parser(value_parser!(MpdFormatter))
+            .conflicts_with("suffix")
+            .requires("mpd")
         )
         .arg(
             arg!(-D --"default-placeholder" <PLACEHOLDER> "Default placeholder for missing values")
-                .default_value("N/A")
-                .requires("mpd")
+            .default_value("N/A")
+            .requires("mpd")
         );
-    }
+
     let mut matches = cli.get_matches();
     let mut text = text_from_matches(&mut matches)?;
     let (cmd, mut sub_matches) = matches.remove_subcommand().unwrap();

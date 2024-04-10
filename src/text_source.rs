@@ -110,8 +110,8 @@ impl TextSource {
     pub fn get_content(
         &mut self,
         content: &mut String,
-        prefix: &mut String,
-        suffix: &mut String,
+        #[cfg(feature = "mpd")] prefix: &mut String,
+        #[cfg(feature = "mpd")] suffix: &mut String,
     ) -> anyhow::Result<ContentChange> {
         match self {
             TextSource::String(_) => Ok(ContentChange::empty()),

@@ -97,9 +97,13 @@ impl RunningText {
         !self.repeat && self.window_size >= self.content_char_len
     }
     fn get_new_content(&mut self) -> anyhow::Result<ContentChange> {
-        let changes =
-            self.source
-                .get_content(&mut self.content, &mut self.prefix, &mut self.suffix)?;
+        let changes = self.source.get_content(
+            &mut self.content,
+            #[cfg(feature = "mpd")]
+            &mut self.prefix,
+            #[cfg(feature = "mpd")]
+            &mut self.suffix,
+        )?;
         if !changes.contains(ContentChange::Running) {
             return Ok(changes);
         }

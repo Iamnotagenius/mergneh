@@ -7,8 +7,8 @@ mod mpd;
 mod waybar;
 
 use std::{
-    fs::{self},
-    io::{self},
+    fs,
+    io,
     path::PathBuf,
     time::Duration, ffi::OsString,
 };
@@ -69,6 +69,7 @@ fn main() -> anyhow::Result<()> {
                 .arg(arg!(-d --duration <DURATION> "Tick duration")
                      .value_parser(value_parser!(humantime::Duration))
                      .default_value("1s"))
+                .arg(arg!(-n --newline "Print each iteration on next line"))
                 .about("Run text in a terminal")
         )
         .subcommand(
@@ -170,7 +171,7 @@ fn main() -> anyhow::Result<()> {
             let duration: Duration = sub_matches
                 .remove_one::<humantime::Duration>("duration")
                 .unwrap().into();
-            text.run_on_terminal(duration)?;
+            text.run_on_terminal(duration, sub_matches.remove_one("newline").unwrap())?;
         }
         "iter" => {
             let iter_file = sub_matches.remove_one::<PathBuf>("ITER_FILE").unwrap();

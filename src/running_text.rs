@@ -1,7 +1,4 @@
-use std::{
-    io::{self, Write},
-    time::Duration,
-};
+use std::{fmt::Write, io, time::Duration};
 
 use ticker::Ticker;
 
@@ -76,11 +73,11 @@ impl RunningText {
     pub fn get_raw_content(&self) -> &str {
         &self.content
     }
-    pub fn run_on_terminal(self, duration: Duration) -> anyhow::Result<()> {
+    pub fn run_on_terminal(self, duration: Duration, newline: bool) -> anyhow::Result<()> {
         let tick = Ticker::new(self, duration);
         for text in tick {
-            print!("\r{}", text?);
-            io::stdout().flush()?;
+            print!("{}{}", text?, if newline { '\n' } else { '\r' });
+            io::Write::flush(&mut io::stdout())?;
         }
         Ok(())
     }
@@ -104,6 +101,8 @@ impl RunningText {
     }
     #[cfg(feature = "waybar")]
     pub fn run_in_waybar(self, duration: Duration, tooltip: Option<Tooltip>) -> anyhow::Result<()> {
+        use std::io::Write;
+
         match tooltip {
             Some(Tooltip::Simple(s)) => {
                 let tick = Ticker::new(self, duration);
@@ -154,10 +153,12 @@ impl RunningText {
             self.byte_offset = self.content.char_indices().nth(self.i).unwrap().0;
         }
         self.text = if self.does_content_fit() {
-            let mut full = self.prefix.clone();
-            full.push_str(&self.content[..content_len]);
-            full.push_str(&self.suffix);
-            full
+            format!(
+                "{}{}{}",
+                &self.prefix,
+                &self.content[..content_len],
+                &self.suffix
+            )
         } else {
             String::new()
         };
@@ -179,10 +180,15 @@ impl Iterator for RunningText {
         if self.does_content_fit() {
             if !changes.is_empty() {
                 self.text.clear();
-                self.text.push_str(&self.prefix);
-                self.text
-                    .push_str(&self.content[..self.content.len() - self.separator.len()]);
-                self.text.push_str(&self.suffix);
+                if let Err(e) = write!(
+                    self.text,
+                    "{}{}{}",
+                    &self.prefix,
+                    &self.content[..self.content.len() - self.separator.len()],
+                    &self.suffix
+                ) {
+                    return Some(Err(e.into()));
+                };
             }
             return Some(Ok(self.text.to_owned()));
         }

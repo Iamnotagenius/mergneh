@@ -3,8 +3,6 @@ mod utils;
 mod text_source;
 #[cfg(feature = "mpd")]
 mod mpd;
-#[cfg(feature = "waybar")]
-mod waybar;
 
 use std::{
     fs,
@@ -19,8 +17,6 @@ use clap::{
     arg, command, crate_description, crate_name, value_parser, ArgAction, ArgGroup, ArgMatches, Command, ValueHint
 };
 use text_source::TextSource;
-#[cfg(feature = "waybar")]
-use waybar::Tooltip;
 
 use crate::running_text::RunningText;
 
@@ -80,27 +76,6 @@ fn main() -> anyhow::Result<()> {
                 .about("Print just one iteration")
                 .arg_required_else_help(true),
         );
-    #[cfg(feature = "waybar")] {
-        let mut cmd = Command::new("waybar")
-            .arg(arg!(-d --duration <DURATION> "Tick duration")
-                 .value_parser(value_parser!(humantime::Duration))
-                 .default_value("1s"))
-            .arg(arg!([TOOLTIP] "Tooltip to show on hover"))
-            .arg(arg!(--"tooltip-cmd" <ARGS> ... "Use output of a command for tooltip")
-                 .value_parser(value_parser!(OsString))
-                 .num_args(1..))
-            .group(ArgGroup::new("tooltips")
-                   .multiple(false)
-                   .args(["TOOLTIP", "tooltip-cmd"]))
-            .about("Run text with custom module in waybar (JSON output)");
-        #[cfg(feature = "mpd")] {
-            cmd = cmd.arg(arg!(-t --"tooltip-format" [FORMAT] "Tooltip format with MPD placeholder support [default: {artist} - {title}]")
-                          .value_parser(value_parser!(MpdFormatter))
-                          .default_missing_value("{artist} - {title}")
-                          .group("tooltips"));
-        }
-        cli = cli.subcommand(cmd);
-    }
     #[cfg(feature = "mpd")] {
         cli = cli
         .arg(
@@ -192,24 +167,6 @@ fn main() -> anyhow::Result<()> {
             };
             let i = text.print_once(i, prev_content.as_str())?;
             fs::write(iter_file, format!("{i} {}", text.get_raw_content()))?;
-        }
-        #[cfg(feature = "waybar")]
-        "waybar" => {
-            let duration: Duration = sub_matches
-                .remove_one::<humantime::Duration>("duration")
-                .unwrap().into();
-            #[cfg(feature = "mpd")] {
-                let tooltip = sub_matches.remove_one::<MpdFormatter>("tooltip-format")
-                    .map(Tooltip::Mpd)
-                    .or(sub_matches.remove_one("TOOLTIP").map(Tooltip::Simple))
-                    .or(sub_matches.remove_many::<OsString>("tooltip-cmd").map(|vs| Tooltip::Cmd(vs.collect())));
-                text.run_in_waybar(duration, tooltip)?;
-            }
-            #[cfg(not(feature = "mpd"))] {
-                let tooltip = sub_matches.remove_one("TOOLTIP").map(Tooltip::Simple)
-                    .or(sub_matches.remove_many::<OsString>("tooltip-cmd").map(|vs| Tooltip::Cmd(vs.collect())));
-                text.run_in_waybar(duration, tooltip)?;
-            }
         }
         _ => unreachable!(),
     }

@@ -2,8 +2,6 @@ use std::{fmt::Write, io, time::Duration};
 
 use ticker::Ticker;
 
-#[cfg(feature = "waybar")]
-use crate::waybar::{RunningTextWithTooltip, Tooltip};
 use crate::{
     text_source::{Content, ContentChange},
     utils::replace_newline,
@@ -94,40 +92,6 @@ impl RunningText {
             .0;
         println!("{}", self.next().unwrap()?);
         Ok(self.i)
-    }
-    #[cfg(feature = "waybar")]
-    pub fn with_tooltip(self, tooltip: Tooltip) -> RunningTextWithTooltip {
-        RunningTextWithTooltip::new(self, tooltip)
-    }
-    #[cfg(feature = "waybar")]
-    pub fn run_in_waybar(self, duration: Duration, tooltip: Option<Tooltip>) -> anyhow::Result<()> {
-        use std::io::Write;
-
-        match tooltip {
-            Some(Tooltip::Simple(s)) => {
-                let tick = Ticker::new(self, duration);
-                for text in tick {
-                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text?, s);
-                }
-            }
-            Some(t) => {
-                let tick = Ticker::new(self.with_tooltip(t), duration);
-                for (text, tt) in tick {
-                    println!("{{\"text\":\"{}\",\"tooltip\":\"{}\"}}", text?, tt);
-                }
-            }
-            None => {
-                let tick = Ticker::new(self, duration);
-                for text in tick {
-                    println!("{{\"text\":\"{}\"}}", text?);
-                }
-            }
-        };
-        io::stdout().flush()?;
-        Ok(())
-    }
-    pub fn get_source(&self) -> &TextSource {
-        &self.source
     }
     fn does_content_fit(&self) -> bool {
         !self.repeat && self.window_size >= self.content_char_len

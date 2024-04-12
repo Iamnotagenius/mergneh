@@ -8,6 +8,7 @@ use crate::{
     TextSource,
 };
 
+#[derive(Debug)]
 pub struct RunningText {
     source: TextSource,
     content: String,
@@ -186,5 +187,175 @@ impl Iterator for RunningText {
         self.byte_offset %= self.content.len();
         self.text.push_str(&self.suffix);
         Some(Ok(self.text.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Ok, Result};
+
+    use crate::text_source::TextSource;
+
+    use super::RunningText;
+
+    macro_rules! assert_text {
+        ($var:ident, $($iter:literal),+) => {
+            $(assert_eq!($var.next().unwrap()?, $iter));+
+        }
+    }
+
+    #[test]
+    fn one_full_cycle() -> Result<()> {
+        let mut text = RunningText::new(
+            TextSource::content(
+                "I am a running text".to_owned(),
+                "".to_owned(),
+                "".to_owned(),
+            ),
+            12,
+            "|".to_owned(),
+            "".to_owned(),
+            false,
+            false,
+        )?;
+        assert_text!(
+            text,
+            "I am a runni",
+            " am a runnin",
+            "am a running",
+            "m a running ",
+            " a running t",
+            "a running te",
+            " running tex",
+            "running text",
+            "unning text|",
+            "nning text|I",
+            "ning text|I ",
+            "ing text|I a",
+            "ng text|I am",
+            "g text|I am ",
+            " text|I am a",
+            "text|I am a ",
+            "ext|I am a r",
+            "xt|I am a ru",
+            "t|I am a run",
+            "|I am a runn",
+            "I am a runni"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_prefix_and_suffix() -> Result<()> {
+        let mut text = RunningText::new(
+            TextSource::content(
+                "I am a running text".to_owned(),
+                ">> ".to_owned(),
+                " <<".to_owned(),
+            ),
+            12,
+            "|".to_owned(),
+            "".to_owned(),
+            false,
+            false,
+        )?;
+        assert_text!(
+            text,
+            ">> I am a runni <<",
+            ">>  am a runnin <<",
+            ">> am a running <<",
+            ">> m a running  <<",
+            ">>  a running t <<",
+            ">> a running te <<",
+            ">>  running tex <<",
+            ">> running text <<",
+            ">> unning text| <<",
+            ">> nning text|I <<",
+            ">> ning text|I  <<",
+            ">> ing text|I a <<",
+            ">> ng text|I am <<",
+            ">> g text|I am  <<",
+            ">>  text|I am a <<",
+            ">> text|I am a  <<",
+            ">> ext|I am a r <<",
+            ">> xt|I am a ru <<",
+            ">> t|I am a run <<",
+            ">> |I am a runn <<",
+            ">> I am a runni <<"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_repeat() -> Result<()> {
+        let mut text = RunningText::new(
+            TextSource::content(
+                "I am a running text".to_owned(),
+                "".to_owned(),
+                "".to_owned(),
+            ),
+            25,
+            "|".to_owned(),
+            "".to_owned(),
+            true,
+            false,
+        )?;
+        assert_text!(
+            text,
+            "I am a running text|I am ",
+            " am a running text|I am a",
+            "am a running text|I am a ",
+            "m a running text|I am a r",
+            " a running text|I am a ru",
+            "a running text|I am a run",
+            " running text|I am a runn",
+            "running text|I am a runni",
+            "unning text|I am a runnin",
+            "nning text|I am a running",
+            "ning text|I am a running ",
+            "ing text|I am a running t",
+            "ng text|I am a running te",
+            "g text|I am a running tex",
+            " text|I am a running text",
+            "text|I am a running text|",
+            "ext|I am a running text|I",
+            "xt|I am a running text|I ",
+            "t|I am a running text|I a",
+            "|I am a running text|I am",
+            "I am a running text|I am "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn special_chars() -> Result<()> {
+        let mut text = RunningText::new(
+            TextSource::content("?#@!$%^^&*()".to_owned(), "$ ".to_owned(), " &<".to_owned()),
+            12,
+            "".to_owned(),
+            "".to_owned(),
+            true,
+            false,
+        )?;
+        assert_text!(
+            text,
+            "$ ?#@!$%^^&*() &<",
+            "$ #@!$%^^&*()? &<",
+            "$ @!$%^^&*()?# &<",
+            "$ !$%^^&*()?#@ &<",
+            "$ $%^^&*()?#@! &<",
+            "$ %^^&*()?#@!$ &<",
+            "$ ^^&*()?#@!$% &<",
+            "$ ^&*()?#@!$%^ &<",
+            "$ &*()?#@!$%^^ &<",
+            "$ *()?#@!$%^^& &<",
+            "$ ()?#@!$%^^&* &<",
+            "$ )?#@!$%^^&*( &<",
+            "$ ?#@!$%^^&*() &<",
+            "$ #@!$%^^&*()? &<",
+            "$ @!$%^^&*()?# &<",
+            "$ !$%^^&*()?#@ &<"
+        );
+        Ok(())
     }
 }

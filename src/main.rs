@@ -13,6 +13,7 @@ use std::{
 #[cfg(feature = "mpd")]
 use std::net::SocketAddr;
 
+use anyhow::anyhow;
 use clap::{
     arg, command, crate_description, crate_name, value_parser, ArgAction, ArgGroup, ArgMatches, Command, ValueHint
 };
@@ -23,12 +24,17 @@ use crate::running_text::RunningText;
 #[cfg(feature = "mpd")]
 use crate::mpd::{StatusIcons, StateStatusIcons, MpdFormatter};
 
+fn parse_key_value_pair(value: &str) -> anyhow::Result<(String, String)> {
+    value.split_once('=').map(|(l, r)| (l.to_owned(), r.to_owned())).ok_or(anyhow!("Key-value pair must have at least one '=' sign"))
+}
+
 fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<RunningText> {
     RunningText::new(
         TextSource::try_from(&mut *matches)?,
         matches.remove_one::<u64>("window").unwrap() as usize,
         matches.remove_one("separator").unwrap(),
         matches.remove_one("newline").unwrap(),
+        matches.remove_many("replacements").unwrap_or_default().collect(),
         matches.remove_one("dont-repeat").unwrap(),
         matches.remove_one("reset-on-change").unwrap(),
     )
@@ -45,6 +51,13 @@ fn main() -> anyhow::Result<()> {
         .arg(arg!(-r --suffix <SUFFIX> "String to print after running text").default_value(""))
         .arg(arg!(-'1' --"dont-repeat" "Do not repeat contents if it fits in the window size").action(ArgAction::SetFalse))
         .arg(arg!(--"reset-on-change" "Reset text window on content change"))
+        .arg(arg!(-e --replacements <REPLACE> "Key-value pairs of replacements. Specified as 'src=dest'.
+Multiple replacements can be passed either as one argument separated by comma: -e src1=dest1,src2=dest2
+or as separated arguments: -e src1=dest1 -e src2=dest2.
+Order of replacements matters. Useful for escaping special characters.")
+             .value_delimiter(',')
+             .value_parser(parse_key_value_pair)
+             .action(ArgAction::Append))
         .next_help_heading("Sources")
         .arg(arg!(<SOURCE> "    Same as --file, if file with this name does not exist or is a directory, it will behave as --string"))
         .arg(arg!(-f --file <FILE> "Pull contents from a file (BEWARE: it loads whole file into memory!)"))

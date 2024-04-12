@@ -16,6 +16,7 @@ pub struct RunningText {
     separator: String,
     prefix: String,
     suffix: String,
+    replacements: Vec<(String, String)>,
     window_size: usize,
     repeat: bool,
     reset_on_change: bool,
@@ -32,6 +33,7 @@ impl RunningText {
         window_size: usize,
         mut separator: String,
         newline: String,
+        replacements: Vec<(String, String)>,
         repeat: bool,
         reset_on_change: bool,
     ) -> anyhow::Result<Self> {
@@ -59,6 +61,7 @@ impl RunningText {
             content,
             newline,
             separator,
+            replacements,
             prefix,
             suffix,
             window_size,
@@ -97,6 +100,22 @@ impl RunningText {
     fn does_content_fit(&self) -> bool {
         !self.repeat && self.window_size >= self.content_char_len
     }
+    fn apply_replacements(&mut self) {
+        for (src, dest) in self.replacements.iter() {
+            let ranges = self
+                .text
+                .match_indices(src)
+                .enumerate()
+                .map(|(i, (j, m))| {
+                    let diff = (dest.len() as isize - src.len() as isize) * i as isize;
+                    j.saturating_add_signed(diff)..(j + m.len()).saturating_add_signed(diff)
+                })
+                .collect::<Vec<_>>();
+            for range in ranges {
+                self.text.replace_range(range, dest);
+            }
+        }
+    }
     fn get_new_content(&mut self) -> anyhow::Result<ContentChange> {
         let changes = self.source.get_content(
             &mut self.content,
@@ -108,7 +127,6 @@ impl RunningText {
         if !changes.contains(ContentChange::Running) {
             return Ok(changes);
         }
-        // TODO: not always reset pos on content change
         replace_newline(&mut self.content, &self.newline);
         let content_len = self.content.len();
         self.content_char_len = self.content.chars().count();
@@ -131,6 +149,7 @@ impl RunningText {
         } else {
             String::new()
         };
+        self.apply_replacements();
         Ok(changes)
     }
 }
@@ -159,6 +178,7 @@ impl Iterator for RunningText {
                     return Some(Err(e.into()));
                 };
             }
+            self.apply_replacements();
             return Some(Ok(self.text.to_owned()));
         }
         self.text.clear();
@@ -186,6 +206,7 @@ impl Iterator for RunningText {
             .unwrap_or_default();
         self.byte_offset %= self.content.len();
         self.text.push_str(&self.suffix);
+        self.apply_replacements();
         Some(Ok(self.text.clone()))
     }
 }
@@ -215,6 +236,7 @@ mod tests {
             12,
             "|".to_owned(),
             "".to_owned(),
+            vec![],
             false,
             false,
         )?;
@@ -256,6 +278,7 @@ mod tests {
             12,
             "|".to_owned(),
             "".to_owned(),
+            vec![],
             false,
             false,
         )?;
@@ -297,6 +320,7 @@ mod tests {
             25,
             "|".to_owned(),
             "".to_owned(),
+            vec![],
             true,
             false,
         )?;
@@ -334,6 +358,7 @@ mod tests {
             12,
             "".to_owned(),
             "".to_owned(),
+            vec![],
             true,
             false,
         )?;
@@ -355,6 +380,42 @@ mod tests {
             "$ #@!$%^^&*()? &<",
             "$ @!$%^^&*()?# &<",
             "$ !$%^^&*()?#@ &<"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement() -> Result<()> {
+        let mut text = RunningText::new(
+            TextSource::content("?#@!$%^^&*()".to_owned(), "$ ".to_owned(), " &<".to_owned()),
+            12,
+            "".to_owned(),
+            "".to_owned(),
+            vec![
+                ("&".to_owned(), "&amp".to_owned()),
+                ("()".to_owned(), "b".to_owned()),
+            ],
+            true,
+            false,
+        )?;
+        assert_text!(
+            text,
+            "$ ?#@!$%^^&amp*b &amp<",
+            "$ #@!$%^^&amp*b? &amp<",
+            "$ @!$%^^&amp*b?# &amp<",
+            "$ !$%^^&amp*b?#@ &amp<",
+            "$ $%^^&amp*b?#@! &amp<",
+            "$ %^^&amp*b?#@!$ &amp<",
+            "$ ^^&amp*b?#@!$% &amp<",
+            "$ ^&amp*b?#@!$%^ &amp<",
+            "$ &amp*b?#@!$%^^ &amp<",
+            "$ *b?#@!$%^^&amp &amp<",
+            "$ b?#@!$%^^&amp* &amp<",
+            "$ )?#@!$%^^&amp*( &amp<",
+            "$ ?#@!$%^^&amp*b &amp<",
+            "$ #@!$%^^&amp*b? &amp<",
+            "$ @!$%^^&amp*b?# &amp<",
+            "$ !$%^^&amp*b?#@ &amp<"
         );
         Ok(())
     }

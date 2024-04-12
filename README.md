@@ -40,7 +40,7 @@ Suppose we defined a module `custom/mpd`, now we only need to configure the modu
     "on-click": "mpc toggle > /dev/null",
     "on-scroll-up": "mpc volume +5",
     "on-scroll-down": "mpc volume -5",
-    "exec": "mg --mpd -l \"{\\\"text\\\":\\\" \" -R \" [{elapsedTime}/{totalTime}] {stateIcon}\\\",\\\"tooltip\\\":\\\"{artist} - {title}: [{album} ({date})] ({randomIcon:1}{repeatIcon:1}{singleIcon:1}{consumeIcon:1}) {{{songPosition}/{queueLength}}}\\\"}}\" -w 30 -s \"  \" -1 run -d 100ms -n",
+    "exec": "mg --mpd -l \"{\\\"text\\\":\\\" \" -R \" [{elapsedTime}/{totalTime}] {stateIcon}\\\",\\\"tooltip\\\":\\\"{artist} - {title}: [{album} ({date})] ({randomIcon:1}{repeatIcon:1}{singleIcon:1}{consumeIcon:1}) {{{songPosition}/{queueLength}}}\\\"}}\" -w 30 -s \"  \" -e \"&=&amp;\" -1 run -d 100ms -n",
     "return-type": "json"
 }
 ```

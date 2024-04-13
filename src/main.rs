@@ -41,7 +41,10 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<RunningText> {
 }
 
 fn main() -> anyhow::Result<()> {
-    // TODO: support for multiple running texts (like each one has its own source etc)
+    // TODO:
+    // - support for multiple running texts (like each one has its own source etc)
+    // - support for long texts (without reading whole content)
+    // - --once option for run subcommand
     let cli = command!(crate_name!())
         .about(crate_description!())
         .arg(arg!(-w --window <WINDOW> "Window size").value_parser(value_parser!(u64).range(1..)).default_value("32"))

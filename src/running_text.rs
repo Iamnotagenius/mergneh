@@ -47,16 +47,9 @@ impl RunningText {
         let content_len = content.len();
         let count = content[..content_len].chars().count();
         content += &separator;
-        Ok(RunningText {
+        let mut new = RunningText {
             source,
-            text: if !repeat && window_size >= count {
-                let mut full = prefix.clone();
-                full.push_str(&content[..content_len]);
-                full.push_str(&suffix);
-                full
-            } else {
-                String::new()
-            },
+            text: String::new(),
             full_content_char_len: count + content[content_len..].chars().count(),
             content,
             newline,
@@ -70,7 +63,18 @@ impl RunningText {
             content_char_len: count,
             i: 0,
             byte_offset: 0,
-        })
+        };
+        if new.does_content_fit() {
+            write!(
+                new.text,
+                "{}{}{}",
+                new.prefix,
+                &new.content[..content_len],
+                new.suffix
+            )?;
+            new.apply_replacements();
+        }
+        Ok(new)
     }
     pub fn get_raw_content(&self) -> &str {
         &self.content
@@ -128,7 +132,6 @@ impl RunningText {
             return Ok(changes);
         }
         replace_newline(&mut self.content, &self.newline);
-        let content_len = self.content.len();
         self.content_char_len = self.content.chars().count();
         self.content += &self.separator;
         self.full_content_char_len = self.content_char_len + self.separator.chars().count();
@@ -139,17 +142,6 @@ impl RunningText {
             self.i %= self.full_content_char_len;
             self.byte_offset = self.content.char_indices().nth(self.i).unwrap().0;
         }
-        self.text = if self.does_content_fit() {
-            format!(
-                "{}{}{}",
-                &self.prefix,
-                &self.content[..content_len],
-                &self.suffix
-            )
-        } else {
-            String::new()
-        };
-        self.apply_replacements();
         Ok(changes)
     }
 }
@@ -177,8 +169,8 @@ impl Iterator for RunningText {
                 ) {
                     return Some(Err(e.into()));
                 };
+                self.apply_replacements();
             }
-            self.apply_replacements();
             return Some(Ok(self.text.to_owned()));
         }
         self.text.clear();
@@ -417,6 +409,38 @@ mod tests {
             "$ @!$%^^&amp*b?# &amp<",
             "$ !$%^^&amp*b?#@ &amp<"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn without_repeat() -> Result<()> {
+        let mut text = RunningText::new(
+            TextSource::content("a & b".to_owned(), "".to_owned(), "".to_owned()),
+            5,
+            "".to_owned(),
+            "".to_owned(),
+            vec![],
+            false,
+            false,
+        )?;
+        assert!(text.does_content_fit());
+        assert_text!(text, "a & b", "a & b", "a & b", "a & b");
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_without_repeat() -> Result<()> {
+        let mut text = RunningText::new(
+            TextSource::content("a & b".to_owned(), "".to_owned(), "".to_owned()),
+            5,
+            "|".to_owned(),
+            "".to_owned(),
+            vec![("&".to_owned(), "&amp;".to_owned())],
+            false,
+            false,
+        )?;
+        assert!(text.does_content_fit());
+        assert_text!(text, "a &amp; b", "a &amp; b", "a &amp; b", "a &amp; b");
         Ok(())
     }
 }

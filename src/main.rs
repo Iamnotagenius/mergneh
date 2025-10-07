@@ -131,7 +131,11 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText
                         repeat,
                         reset,
                     )?);
-                    window = 32;
+                    window = if let SourceToken::String(s) = source_token {
+                        s.chars().count()
+                    } else {
+                        32
+                    } as u64;
                     separator = &separator_default;
                     newline = &newline_default;
                     replacements = &replacements_default;
@@ -199,7 +203,7 @@ fn main() -> anyhow::Result<()> {
     // - --once option for run subcommand
     let cli = command!(crate_name!())
         .about(crate_description!())
-        .arg(arg!(-w --window <WINDOW> "Window size")
+        .arg(arg!(-w --window <WINDOW> "Window size (if the corresponding source is string, will be equal to its length)")
             .value_parser(value_parser!(u64)
                 .range(1..)
                 .map(ArgToken::Window))

@@ -282,7 +282,7 @@ impl Default for MpdSourceArgs {
                 Placeholder::String(" - ".to_owned()),
                 Placeholder::Title,
             ]),
-            default_placeholder: Default::default(),
+            default_placeholder: "N/A".to_owned(),
             state_icons: StateStatusIcons {
                 play: '',
                 pause: '',
@@ -290,8 +290,8 @@ impl Default for MpdSourceArgs {
             },
             consume_icons: StatusIcons::single(''),
             random_icons: StatusIcons::single(''),
-            repeat_icons: StatusIcons::single(''),
-            single_icons: StatusIcons::single(''),
+            repeat_icons: StatusIcons::single(''),
+            single_icons: StatusIcons::single('S'),
         }
     }
 }

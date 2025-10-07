@@ -1,17 +1,13 @@
 use bitflags::bitflags;
-use clap::{ArgMatches, Id};
 
 use std::{
-    ffi::{OsStr, OsString},
-    fs::{self},
-    io::{self},
-    path::Path,
+    ffi::{OsStr},
 };
 
 use crate::utils::Command;
 
 #[cfg(feature = "mpd")]
-use crate::mpd::{MpdFormatter, MpdSource, StatusIconsSet};
+use crate::mpd::{MpdSource};
 
 #[derive(Debug, Clone)]
 pub struct Content {
@@ -71,8 +67,8 @@ pub enum TextSource {
 }
 
 impl TextSource {
-    pub fn content(running: String, prefix: String, suffix: String) -> TextSource {
-        TextSource::String(Content {
+    pub fn content(running: String, prefix: String, suffix: String) -> Self {
+        Self::String(Content {
             running,
             prefix,
             suffix,
@@ -120,59 +116,4 @@ impl TextSource {
             TextSource::Cmd(s) => s.get(content),
         }
     }
-}
-
-impl TryFrom<&mut ArgMatches> for TextSource {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &mut ArgMatches) -> anyhow::Result<Self, Self::Error> {
-        let kind = value.remove_one::<Id>("sources").unwrap();
-        let src = value.try_remove_one::<String>(kind.as_str());
-        let prefix = value.remove_one::<String>("prefix").unwrap();
-        let suffix = value.remove_one::<String>("suffix").unwrap();
-        return Ok(match kind.as_str() {
-            "SOURCE" => {
-                TextSource::content(from_file_or_string(&src.unwrap().unwrap())?, prefix, suffix)
-            }
-            "file" => {
-                TextSource::content(fs::read_to_string(src.unwrap().unwrap())?, prefix, suffix)
-            }
-            "string" => TextSource::content(src.unwrap().unwrap(), prefix, suffix),
-            "stdin" => TextSource::content(io::read_to_string(io::stdin())?, prefix, suffix),
-            "cmd" => TextSource::Cmd(CmdSource::new(
-                value.remove_many::<OsString>(kind.as_str()).unwrap(),
-                prefix,
-                suffix,
-            )),
-            #[cfg(feature = "mpd")]
-            "mpd" => TextSource::Mpd(Box::new(MpdSource::new(
-                value.try_remove_one(kind.as_str()).unwrap().unwrap(),
-                value.remove_one("format").unwrap(),
-                value
-                    .remove_one("prefix-format")
-                    .unwrap_or(MpdFormatter::only_string(prefix)),
-                value
-                    .remove_one("suffix-format")
-                    .unwrap_or(MpdFormatter::only_string(suffix)),
-                StatusIconsSet::new(
-                    value.remove_one("status-icons").unwrap(),
-                    value.remove_one("consume-icons").unwrap(),
-                    value.remove_one("random-icons").unwrap(),
-                    value.remove_one("repeat-icons").unwrap(),
-                    value.remove_one("single-icons").unwrap(),
-                ),
-                value.remove_one("default-placeholder").unwrap(),
-            )?)),
-            _ => unreachable!(),
-        });
-    }
-}
-
-fn from_file_or_string(arg: &str) -> io::Result<String> {
-    let path = Path::new(arg);
-    Ok(if path.is_file() {
-        fs::read_to_string(path)?
-    } else {
-        arg.to_owned()
-    })
 }

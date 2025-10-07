@@ -1,6 +1,4 @@
-use std::{fmt::Write, io, time::Duration};
-
-use ticker::Ticker;
+use std::{fmt::Write};
 
 use crate::{
     text_source::{Content, ContentChange},
@@ -45,7 +43,7 @@ impl RunningText {
         replace_newline(&mut content, &newline);
         replace_newline(&mut separator, &newline);
         let content_len = content.len();
-        let count = content[..content_len].chars().count();
+        let count = content.chars().count();
         content += &separator;
         let mut new = RunningText {
             source,
@@ -76,42 +74,17 @@ impl RunningText {
         }
         Ok(new)
     }
-    pub fn get_raw_content(&self) -> &str {
-        &self.content
-    }
-    pub fn run_on_terminal(self, duration: Duration, newline: bool) -> anyhow::Result<()> {
-        let tick = Ticker::new(self, duration);
-        for text in tick {
-            print!("{}{}", text?, if newline { '\n' } else { '\r' });
-            io::Write::flush(&mut io::stdout())?;
-        }
-        Ok(())
-    }
-    pub fn print_once(&mut self, mut i: usize, prev_content: &str) -> anyhow::Result<usize> {
-        if prev_content != self.content {
-            i = 0;
-        }
-        self.i = i;
-        self.byte_offset = self
-            .content
-            .char_indices()
-            .nth(i % self.full_content_char_len)
-            .unwrap()
-            .0;
-        println!("{}", self.next().unwrap()?);
-        Ok(self.i)
-    }
     fn does_content_fit(&self) -> bool {
         !self.repeat && self.window_size >= self.content_char_len
     }
     fn apply_replacements(&mut self) {
         for (src, dest) in self.replacements.iter() {
             let ranges = self
-                .text
+                .text[self.prefix.len()..self.text.len()-self.suffix.len()]
                 .match_indices(src)
                 .enumerate()
                 .map(|(i, (j, m))| {
-                    let diff = (dest.len() as isize - src.len() as isize) * i as isize;
+                    let diff = (dest.len() as isize - src.len() as isize) * i as isize + (self.prefix.len() as isize);
                     j.saturating_add_signed(diff)..(j + m.len()).saturating_add_signed(diff)
                 })
                 .collect::<Vec<_>>();
@@ -392,22 +365,22 @@ mod tests {
         )?;
         assert_text!(
             text,
-            "$ ?#@!$%^^&amp*b &amp<",
-            "$ #@!$%^^&amp*b? &amp<",
-            "$ @!$%^^&amp*b?# &amp<",
-            "$ !$%^^&amp*b?#@ &amp<",
-            "$ $%^^&amp*b?#@! &amp<",
-            "$ %^^&amp*b?#@!$ &amp<",
-            "$ ^^&amp*b?#@!$% &amp<",
-            "$ ^&amp*b?#@!$%^ &amp<",
-            "$ &amp*b?#@!$%^^ &amp<",
-            "$ *b?#@!$%^^&amp &amp<",
-            "$ b?#@!$%^^&amp* &amp<",
-            "$ )?#@!$%^^&amp*( &amp<",
-            "$ ?#@!$%^^&amp*b &amp<",
-            "$ #@!$%^^&amp*b? &amp<",
-            "$ @!$%^^&amp*b?# &amp<",
-            "$ !$%^^&amp*b?#@ &amp<"
+            "$ ?#@!$%^^&amp*b &<",
+            "$ #@!$%^^&amp*b? &<",
+            "$ @!$%^^&amp*b?# &<",
+            "$ !$%^^&amp*b?#@ &<",
+            "$ $%^^&amp*b?#@! &<",
+            "$ %^^&amp*b?#@!$ &<",
+            "$ ^^&amp*b?#@!$% &<",
+            "$ ^&amp*b?#@!$%^ &<",
+            "$ &amp*b?#@!$%^^ &<",
+            "$ *b?#@!$%^^&amp &<",
+            "$ b?#@!$%^^&amp* &<",
+            "$ )?#@!$%^^&amp*( &<",
+            "$ ?#@!$%^^&amp*b &<",
+            "$ #@!$%^^&amp*b? &<",
+            "$ @!$%^^&amp*b?# &<",
+            "$ !$%^^&amp*b?#@ &<"
         );
         Ok(())
     }

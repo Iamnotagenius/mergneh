@@ -1,12 +1,5 @@
 use std::{
-    collections::HashMap,
-    error::Error,
-    fmt::Display,
-    fmt::{self, Write},
-    net::SocketAddr,
-    num::ParseIntError,
-    str::FromStr,
-    time::Duration,
+    collections::HashMap, error::Error, fmt::{self, Display, Write}, net::{SocketAddr}, num::ParseIntError, str::FromStr, time::Duration
 };
 
 use anyhow::Context;
@@ -14,9 +7,10 @@ use chrono::{
     format::{Item, StrftimeItems},
     NaiveTime,
 };
+use clap::builder::{ValueParserFactory};
 use mpd::{song::QueuePlace, Client, Song, State, Status};
 
-use crate::text_source::ContentChange;
+use crate::{text_source::ContentChange, ArgToken, SourceArgToken};
 
 #[derive(Debug)]
 pub enum IconSetParseError<const N: usize> {
@@ -35,11 +29,19 @@ impl<const N: usize> Display for IconSetParseError<N> {
 }
 impl<const N: usize> Error for IconSetParseError<N> {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StateStatusIcons {
     play: char,
     pause: char,
     stop: char,
+}
+
+impl ValueParserFactory for StateStatusIcons {
+    type Parser = fn(&str) -> anyhow::Result<ArgToken>;
+
+    fn value_parser() -> Self::Parser {
+        |s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::StateIcons(s.parse()?))))
+    }
 }
 
 impl StateStatusIcons {
@@ -52,13 +54,16 @@ impl StateStatusIcons {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StatusIcons {
     enabled: char,
     disabled: Option<char>,
 }
 
 impl StatusIcons {
+    pub fn single(c: char) -> Self {
+        Self { enabled: c, disabled: None }
+    }
     pub fn get_icon(&self, state: bool) -> Option<char> {
         if state {
             Some(self.enabled)
@@ -219,6 +224,78 @@ impl Display for MpdFormatParseError {
 }
 impl Error for MpdFormatParseError {}
 
+#[derive(Debug, Clone)]
+pub enum MpdArgToken {
+    Format(MpdFormatter),
+    Placeholder(String),
+    StateIcons(StateStatusIcons),
+    ConsumeIcons(StatusIcons),
+    RandomIcons(StatusIcons),
+    RepeatIcons(StatusIcons),
+    SingleIcons(StatusIcons),
+}
+
+#[derive(Debug, Clone)]
+pub struct MpdSourceArgs {
+    fmt: MpdFormatter,
+    default_placeholder: String,
+    state_icons: StateStatusIcons,
+    consume_icons: StatusIcons,
+    random_icons: StatusIcons,
+    repeat_icons: StatusIcons,
+    single_icons: StatusIcons,
+}
+
+impl MpdSourceArgs {
+    pub fn apply_token(&mut self, token: &MpdArgToken) {
+        match token {
+            MpdArgToken::Format(mpd_formatter) => {
+                self.fmt = mpd_formatter.clone();
+            },
+            MpdArgToken::Placeholder(p) => {
+                self.default_placeholder = p.to_owned();
+            },
+            MpdArgToken::StateIcons(state_status_icons) => {
+                self.state_icons = *state_status_icons;
+            },
+            MpdArgToken::ConsumeIcons(status_icons) => {
+                self.consume_icons = *status_icons;
+            },
+            MpdArgToken::RandomIcons(status_icons) => {
+                self.random_icons = *status_icons;
+            },
+            MpdArgToken::RepeatIcons(status_icons) => {
+                self.repeat_icons = *status_icons;
+            },
+            MpdArgToken::SingleIcons(status_icons) => {
+                self.single_icons = *status_icons;
+            },
+        }
+    }
+}
+
+impl Default for MpdSourceArgs {
+    fn default() -> Self {
+        Self {
+            fmt: MpdFormatter(vec![
+                Placeholder::Artist,
+                Placeholder::String(" - ".to_owned()),
+                Placeholder::Title,
+            ]),
+            default_placeholder: Default::default(),
+            state_icons: StateStatusIcons {
+                play: '',
+                pause: '',
+                stop: '',
+            },
+            consume_icons: StatusIcons::single(''),
+            random_icons: StatusIcons::single(''),
+            repeat_icons: StatusIcons::single(''),
+            single_icons: StatusIcons::single(''),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MpdSource {
     client: Client,
@@ -232,6 +309,22 @@ pub struct MpdSource {
 }
 
 impl MpdSource {
+    pub fn from_args(addr: SocketAddr, args: MpdSourceArgs) -> anyhow::Result<Self> {
+        Self::new(
+            addr,
+            args.fmt,
+            MpdFormatter(vec![]),
+            MpdFormatter(vec![]),
+            StatusIconsSet {
+                state: args.state_icons,
+                consume: args.consume_icons,
+                random: args.random_icons,
+                repeat: args.repeat_icons,
+                single: args.single_icons,
+            },
+            args.default_placeholder
+        )
+    }
     pub fn new(
         addr: SocketAddr,
         fmt: MpdFormatter,

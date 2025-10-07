@@ -1,7 +1,6 @@
 use std::{fmt::Write};
 
 use crate::{
-    text_source::{Content, ContentChange},
     utils::replace_newline,
     TextSource,
 };
@@ -12,8 +11,6 @@ pub struct RunningText {
     content: String,
     newline: String,
     separator: String,
-    prefix: String,
-    suffix: String,
     replacements: Vec<(String, String)>,
     window_size: usize,
     repeat: bool,
@@ -35,11 +32,7 @@ impl RunningText {
         repeat: bool,
         reset_on_change: bool,
     ) -> anyhow::Result<Self> {
-        let Content {
-            running: mut content,
-            prefix,
-            suffix,
-        } = source.get_initial_content()?;
+        let mut content = source.get_initial_content()?;
         replace_newline(&mut content, &newline);
         replace_newline(&mut separator, &newline);
         let content_len = content.len();
@@ -53,8 +46,6 @@ impl RunningText {
             newline,
             separator,
             replacements,
-            prefix,
-            suffix,
             window_size,
             repeat,
             reset_on_change,
@@ -63,13 +54,7 @@ impl RunningText {
             byte_offset: 0,
         };
         if new.does_content_fit() {
-            write!(
-                new.text,
-                "{}{}{}",
-                new.prefix,
-                &new.content[..content_len],
-                new.suffix
-            )?;
+            new.text.write_str(&new.content[..content_len])?;
             new.apply_replacements();
         }
         Ok(new)
@@ -80,11 +65,11 @@ impl RunningText {
     fn apply_replacements(&mut self) {
         for (src, dest) in self.replacements.iter() {
             let ranges = self
-                .text[self.prefix.len()..self.text.len()-self.suffix.len()]
+                .text
                 .match_indices(src)
                 .enumerate()
                 .map(|(i, (j, m))| {
-                    let diff = (dest.len() as isize - src.len() as isize) * i as isize + (self.prefix.len() as isize);
+                    let diff = (dest.len() as isize - src.len() as isize) * i as isize;
                     j.saturating_add_signed(diff)..(j + m.len()).saturating_add_signed(diff)
                 })
                 .collect::<Vec<_>>();
@@ -93,16 +78,12 @@ impl RunningText {
             }
         }
     }
-    fn get_new_content(&mut self) -> anyhow::Result<ContentChange> {
-        let changes = self.source.get_content(
+    fn get_new_content(&mut self) -> anyhow::Result<bool> {
+        let changed = self.source.get_content(
             &mut self.content,
-            #[cfg(feature = "mpd")]
-            &mut self.prefix,
-            #[cfg(feature = "mpd")]
-            &mut self.suffix,
         )?;
-        if !changes.contains(ContentChange::Running) {
-            return Ok(changes);
+        if !changed {
+            return Ok(false);
         }
         replace_newline(&mut self.content, &self.newline);
         self.content_char_len = self.content.chars().count();
@@ -115,7 +96,7 @@ impl RunningText {
             self.i %= self.full_content_char_len;
             self.byte_offset = self.content.char_indices().nth(self.i).unwrap().0;
         }
-        Ok(changes)
+        Ok(true)
     }
 }
 
@@ -123,7 +104,7 @@ impl Iterator for RunningText {
     type Item = anyhow::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let changes = match self.get_new_content() {
+        let changed = match self.get_new_content() {
             Ok(c) => c,
             Err(e) => return Some(Err(e)),
         };
@@ -131,15 +112,9 @@ impl Iterator for RunningText {
             return None;
         }
         if self.does_content_fit() {
-            if !changes.is_empty() {
+            if changed {
                 self.text.clear();
-                if let Err(e) = write!(
-                    self.text,
-                    "{}{}{}",
-                    &self.prefix,
-                    &self.content[..self.content.len() - self.separator.len()],
-                    &self.suffix
-                ) {
+                if let Err(e) = self.text.write_str(&self.content[..self.content.len() - self.separator.len()]) {
                     return Some(Err(e.into()));
                 };
                 self.apply_replacements();
@@ -147,7 +122,6 @@ impl Iterator for RunningText {
             return Some(Ok(self.text.to_owned()));
         }
         self.text.clear();
-        self.text.push_str(&self.prefix);
         self.text.extend(
             self.content[self.byte_offset..]
                 .chars()
@@ -170,7 +144,6 @@ impl Iterator for RunningText {
             .map(char::len_utf8)
             .unwrap_or_default();
         self.byte_offset %= self.content.len();
-        self.text.push_str(&self.suffix);
         self.apply_replacements();
         Some(Ok(self.text.clone()))
     }
@@ -195,8 +168,6 @@ mod tests {
         let mut text = RunningText::new(
             TextSource::content(
                 "I am a running text".to_owned(),
-                "".to_owned(),
-                "".to_owned(),
             ),
             12,
             "|".to_owned(),
@@ -233,54 +204,10 @@ mod tests {
     }
 
     #[test]
-    fn with_prefix_and_suffix() -> Result<()> {
-        let mut text = RunningText::new(
-            TextSource::content(
-                "I am a running text".to_owned(),
-                ">> ".to_owned(),
-                " <<".to_owned(),
-            ),
-            12,
-            "|".to_owned(),
-            "".to_owned(),
-            vec![],
-            false,
-            false,
-        )?;
-        assert_text!(
-            text,
-            ">> I am a runni <<",
-            ">>  am a runnin <<",
-            ">> am a running <<",
-            ">> m a running  <<",
-            ">>  a running t <<",
-            ">> a running te <<",
-            ">>  running tex <<",
-            ">> running text <<",
-            ">> unning text| <<",
-            ">> nning text|I <<",
-            ">> ning text|I  <<",
-            ">> ing text|I a <<",
-            ">> ng text|I am <<",
-            ">> g text|I am  <<",
-            ">>  text|I am a <<",
-            ">> text|I am a  <<",
-            ">> ext|I am a r <<",
-            ">> xt|I am a ru <<",
-            ">> t|I am a run <<",
-            ">> |I am a runn <<",
-            ">> I am a runni <<"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn with_repeat() -> Result<()> {
         let mut text = RunningText::new(
             TextSource::content(
                 "I am a running text".to_owned(),
-                "".to_owned(),
-                "".to_owned(),
             ),
             25,
             "|".to_owned(),
@@ -319,7 +246,7 @@ mod tests {
     #[test]
     fn special_chars() -> Result<()> {
         let mut text = RunningText::new(
-            TextSource::content("?#@!$%^^&*()".to_owned(), "$ ".to_owned(), " &<".to_owned()),
+            TextSource::content("?#@!$%^^&*()".to_owned()),
             12,
             "".to_owned(),
             "".to_owned(),
@@ -352,7 +279,7 @@ mod tests {
     #[test]
     fn replacement() -> Result<()> {
         let mut text = RunningText::new(
-            TextSource::content("?#@!$%^^&*()".to_owned(), "$ ".to_owned(), " &<".to_owned()),
+            TextSource::content("?#@!$%^^&*()".to_owned()),
             12,
             "".to_owned(),
             "".to_owned(),
@@ -365,22 +292,22 @@ mod tests {
         )?;
         assert_text!(
             text,
-            "$ ?#@!$%^^&amp*b &<",
-            "$ #@!$%^^&amp*b? &<",
-            "$ @!$%^^&amp*b?# &<",
-            "$ !$%^^&amp*b?#@ &<",
-            "$ $%^^&amp*b?#@! &<",
-            "$ %^^&amp*b?#@!$ &<",
-            "$ ^^&amp*b?#@!$% &<",
-            "$ ^&amp*b?#@!$%^ &<",
-            "$ &amp*b?#@!$%^^ &<",
-            "$ *b?#@!$%^^&amp &<",
-            "$ b?#@!$%^^&amp* &<",
-            "$ )?#@!$%^^&amp*( &<",
-            "$ ?#@!$%^^&amp*b &<",
-            "$ #@!$%^^&amp*b? &<",
-            "$ @!$%^^&amp*b?# &<",
-            "$ !$%^^&amp*b?#@ &<"
+            "?#@!$%^^&amp*b",
+            "#@!$%^^&amp*b?",
+            "@!$%^^&amp*b?#",
+            "!$%^^&amp*b?#@",
+            "$%^^&amp*b?#@!",
+            "%^^&amp*b?#@!$",
+            "^^&amp*b?#@!$%",
+            "^&amp*b?#@!$%^",
+            "&amp*b?#@!$%^^",
+            "*b?#@!$%^^&amp",
+            "b?#@!$%^^&amp*",
+            ")?#@!$%^^&amp*(",
+            "?#@!$%^^&amp*b",
+            "#@!$%^^&amp*b?",
+            "@!$%^^&amp*b?#",
+            "!$%^^&amp*b?#@"
         );
         Ok(())
     }
@@ -388,7 +315,7 @@ mod tests {
     #[test]
     fn without_repeat() -> Result<()> {
         let mut text = RunningText::new(
-            TextSource::content("a & b".to_owned(), "".to_owned(), "".to_owned()),
+            TextSource::content("a & b".to_owned()),
             5,
             "".to_owned(),
             "".to_owned(),
@@ -404,7 +331,7 @@ mod tests {
     #[test]
     fn replacement_without_repeat() -> Result<()> {
         let mut text = RunningText::new(
-            TextSource::content("a & b".to_owned(), "".to_owned(), "".to_owned()),
+            TextSource::content("a & b".to_owned()),
             5,
             "|".to_owned(),
             "".to_owned(),

@@ -72,16 +72,14 @@ pub struct SourceArgs {
 fn source_from_token<'a, T>(token: &SourceToken, tokens: T, _args: SourceArgs) -> anyhow::Result<TextSource>
 where T: Iterator<Item = &'a ArgToken> {
     Ok(match token {
-        SourceToken::String(s) => TextSource::content(s.to_owned(), String::default(), String::default()),
-        SourceToken::File(f) => TextSource::content(fs::read_to_string(f)?, String::default(), String::default()),
+        SourceToken::String(s) => TextSource::content(s.to_owned()),
+        SourceToken::File(f) => TextSource::content(fs::read_to_string(f)?),
         SourceToken::CmdArg(_) => TextSource::Cmd(CmdSource::new(tokens
                 .filter_map(|t| match t {
                     ArgToken::Source(SourceToken::CmdArg(a)) => Some(a),
                     _ => None,
-                }),
-                String::default(),
-                String::default())),
-        SourceToken::Stdin => TextSource::content(io::read_to_string(io::stdin())?, String::default(), String::default()),
+                }))),
+        SourceToken::Stdin => TextSource::content(io::read_to_string(io::stdin())?),
         #[cfg(feature = "mpd")]
         SourceToken::Mpd(addr) => TextSource::Mpd(Box::new(MpdSource::from_args(*addr, _args.mpd)?)),
     })
@@ -193,7 +191,10 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText
 
 fn main() -> anyhow::Result<()> {
     // TODO:
-    // - support for multiple running texts (like each one has its own source etc)
+    // - [WIP] support for multiple running texts (like each one has its own source etc)
+    //   need to delete prefix and suffix
+    //   also should use one client for mpd over several sources (poll in other thread,
+    //   asynchronoua)
     // - support for long texts (without reading whole content)
     // - --once option for run subcommand
     let cli = command!(crate_name!())

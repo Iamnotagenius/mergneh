@@ -10,7 +10,7 @@ use chrono::{
 use clap::builder::{ValueParserFactory};
 use mpd::{song::QueuePlace, Client, Song, State, Status};
 
-use crate::{text_source::ContentChange, ArgToken, SourceArgToken};
+use crate::{ArgToken, SourceArgToken};
 
 #[derive(Debug)]
 pub enum IconSetParseError<const N: usize> {
@@ -301,9 +301,7 @@ pub struct MpdSource {
     client: Client,
     current_song: Option<Song>,
     current_status: Status,
-    running_format: MpdFormatter,
-    prefix_format: MpdFormatter,
-    suffix_format: MpdFormatter,
+    format: MpdFormatter,
     icons: StatusIconsSet,
     default_placeholder: String,
 }
@@ -313,8 +311,6 @@ impl MpdSource {
         Self::new(
             addr,
             args.fmt,
-            MpdFormatter(vec![]),
-            MpdFormatter(vec![]),
             StatusIconsSet {
                 state: args.state_icons,
                 consume: args.consume_icons,
@@ -328,8 +324,6 @@ impl MpdSource {
     pub fn new(
         addr: SocketAddr,
         fmt: MpdFormatter,
-        prefix: MpdFormatter,
-        suffix: MpdFormatter,
         icons: StatusIconsSet,
         default_placeholder: String,
     ) -> anyhow::Result<Self> {
@@ -338,9 +332,7 @@ impl MpdSource {
             current_song: client.currentsong().context("MPD server error")?,
             current_status: client.status().context("MPD server error")?,
             client,
-            running_format: fmt,
-            prefix_format: prefix,
-            suffix_format: suffix,
+            format: fmt,
             icons,
             default_placeholder,
         })
@@ -348,56 +340,31 @@ impl MpdSource {
     pub fn get(
         &mut self,
         content: &mut String,
-        prefix: &mut String,
-        suffix: &mut String,
-    ) -> anyhow::Result<ContentChange> {
+    ) -> anyhow::Result<bool> {
         let song = self.client.currentsong().context("MPD server error")?;
         let status = self.client.status().context("MPD server error")?;
-        let mut change = ContentChange::empty();
-        // I made this because I think this looks hilarious and I don't want to repeat this
-        macro_rules! change {
-            {
-                $($var:ident if $type:ident in $fmt:ident;)*
-            } => {
-                $(
-                    change.set(
-                        ContentChange::$type,
-                        self.$fmt
-                        .iter()
-                        .any(|ph| ph.get(self.current_song(), self.current_status()) != ph.get(song.as_ref(), &status)),
-                    );
-                )*
-                $(
-                    if change.contains(ContentChange::$type) {
-                        $var.clear();
-                        self.$fmt.format(
-                            &self.icons,
-                            song.as_ref(),
-                            &status,
-                            &self.default_placeholder,
-                            $var,
-                        )?;
-                    }
-                )*
-            };
-        }
-        change! {
-            prefix if Prefix in prefix_format;
-            suffix if Suffix in suffix_format;
-            content if Running in running_format;
+        let changed = self.format
+            .iter()
+            .any(|ph|
+                ph.get(self.current_song(), self.current_status()) != ph.get(song.as_ref(), &status)
+            );
+        if changed {
+            content.clear();
+            self.format.format(
+                &self.icons,
+                song.as_ref(),
+                &status,
+                &self.default_placeholder,
+                content,
+            )?;
+
         }
         self.current_song = song;
         self.current_status = status;
-        Ok(change)
+        Ok(changed)
     }
-    pub fn running_format(&self) -> &MpdFormatter {
-        &self.running_format
-    }
-    pub fn prefix_format(&self) -> &MpdFormatter {
-        &self.prefix_format
-    }
-    pub fn suffix_format(&self) -> &MpdFormatter {
-        &self.suffix_format
+    pub fn format(&self) -> &MpdFormatter {
+        &self.format
     }
     pub fn icons(&self) -> &StatusIconsSet {
         &self.icons

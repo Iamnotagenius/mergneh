@@ -1,16 +1,19 @@
 use std::{
-    collections::HashMap, error::Error, fmt::{self, Display, Write}, net::{SocketAddr}, num::ParseIntError, str::FromStr, time::Duration
+    collections::{BTreeMap, HashMap}, error::Error, fmt::{self, Display, Write}, net::SocketAddr, num::ParseIntError, str::FromStr, sync::{Arc, Mutex, TryLockError}, thread, time::{Duration, Instant}
 };
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use chrono::{
     format::{Item, StrftimeItems},
     NaiveTime,
 };
 use clap::builder::{ValueParserFactory};
-use mpd::{song::QueuePlace, Client, Song, State, Status};
+use mpd::{song::QueuePlace, Client, Idle, Song, State, Status, Subsystem};
 
 use crate::{ArgToken, SourceArgToken};
+
+// Used for initializing threads for MPD pollers
+static ADDRS: Mutex<BTreeMap<SocketAddr, Arc<Mutex<MpdState>>>> = Mutex::new(BTreeMap::new());
 
 #[derive(Debug)]
 pub enum IconSetParseError<const N: usize> {
@@ -144,6 +147,7 @@ pub enum PlaceholderValue<'a> {
     String(&'a str),
     OptionalString(Option<&'a str>),
     Volume(i8),
+    OptionalElapsedDuration(Option<Duration>, &'a Vec<Item<'static>>),
     OptionalDuration(Option<Duration>, &'a Vec<Item<'static>>),
     OptionalQueuePlace(Option<QueuePlace>),
     Len(u32),
@@ -152,7 +156,7 @@ pub enum PlaceholderValue<'a> {
 }
 
 impl Placeholder {
-    pub fn get<'a>(&'a self, song: Option<&'a Song>, status: &Status) -> PlaceholderValue<'a> {
+    pub fn get<'a>(&'a self, song: Option<&'a Song>, status: &Status, last_state_update_time: Instant) -> PlaceholderValue<'a> {
         let mut tags: HashMap<&str, &str> = song
             .map(|s| {
                 s.tags
@@ -179,7 +183,11 @@ impl Placeholder {
             Placeholder::Date => PlaceholderValue::OptionalString(tags.remove("Date")),
             Placeholder::Volume => PlaceholderValue::Volume(status.volume),
             Placeholder::ElapsedTime(fmt) => {
-                PlaceholderValue::OptionalDuration(status.elapsed, fmt)
+                PlaceholderValue::OptionalDuration(match status.state {
+                    State::Stop => None,
+                    State::Play => status.elapsed.map(|d| last_state_update_time.elapsed() + d),
+                    State::Pause => status.elapsed,
+                }, fmt)
             }
             Placeholder::TotalTime(fmt) => PlaceholderValue::OptionalDuration(status.duration, fmt),
             Placeholder::SongPosition => PlaceholderValue::OptionalQueuePlace(status.song),
@@ -297,10 +305,16 @@ impl Default for MpdSourceArgs {
 }
 
 #[derive(Debug)]
+pub struct MpdState {
+    song: Option<Song>,
+    status: Status,
+    update_time: Instant,
+}
+
+#[derive(Debug)]
 pub struct MpdSource {
-    client: Client,
-    current_song: Option<Song>,
-    current_status: Status,
+    state: Arc<Mutex<MpdState>>,
+    last_state_update_time: Instant,
     format: MpdFormatter,
     icons: StatusIconsSet,
     default_placeholder: String,
@@ -327,11 +341,43 @@ impl MpdSource {
         icons: StatusIconsSet,
         default_placeholder: String,
     ) -> anyhow::Result<Self> {
-        let mut client = Client::connect(addr).context("MPD connection error")?;
+        let mut l = ADDRS.lock().unwrap();
+        let state = match l.try_insert(addr, Arc::new(Mutex::new(MpdState {
+            song: None,
+            status: Status::default(),
+            update_time: Instant::now(),
+        }))) {
+            Err(e) => {
+                e.entry.get().clone()
+            }
+            Ok(s) => {
+                let state = s.clone();
+                let mut client = Client::connect(addr).context("MPD connection error")?;
+                thread::spawn(move || {
+                    let mut song = client.currentsong().expect("MPD connection error");
+                    let mut status = client.status().expect("MPD connection error");
+                    let mut update_time = Instant::now();
+                    *state.lock().unwrap() = MpdState { song, status, update_time };
+                    
+                    loop {
+                        client.wait(&[
+                            Subsystem::Player,
+                            Subsystem::Queue,
+                            Subsystem::Options,
+                            Subsystem::Mixer
+                        ]).expect("MPD connection error");
+                        song = client.currentsong().expect("MPD connection error");
+                        status = client.status().expect("MPD connection error");
+                        update_time = Instant::now();
+                        *state.lock().unwrap() = MpdState { song, status, update_time };
+                    };
+                });
+                s.clone()
+            },
+        };
         Ok(Self {
-            current_song: client.currentsong().context("MPD server error")?,
-            current_status: client.status().context("MPD server error")?,
-            client,
+            state: state,
+            last_state_update_time: Instant::now(),
             format: fmt,
             icons,
             default_placeholder,
@@ -341,39 +387,36 @@ impl MpdSource {
         &mut self,
         content: &mut String,
     ) -> anyhow::Result<bool> {
-        let song = self.client.currentsong().context("MPD server error")?;
-        let status = self.client.status().context("MPD server error")?;
-        let changed = self.format
-            .iter()
-            .any(|ph|
-                ph.get(self.current_song(), self.current_status()) != ph.get(song.as_ref(), &status)
-            );
-        if changed {
-            content.clear();
-            self.format.format(
-                &self.icons,
-                song.as_ref(),
-                &status,
-                &self.default_placeholder,
-                content,
-            )?;
+        let lock = match self.state.try_lock() {
+            Err(TryLockError::Poisoned(l)) => return Err(anyhow!(l.to_string()).context("another thread has panicked")),
+            Err(TryLockError::WouldBlock) => return Ok(false),
+            Ok(l) => l, 
+        };
 
+        if lock.update_time == self.last_state_update_time &&
+            !self.format.iter().any(|ph| matches!(ph, Placeholder::ElapsedTime(_))) {
+            return Ok(false)
         }
-        self.current_song = song;
-        self.current_status = status;
-        Ok(changed)
+
+        self.last_state_update_time = lock.update_time;
+
+        content.clear();
+        self.format.format(
+            &self.icons,
+            lock.song.as_ref(),
+            &lock.status,
+            lock.update_time,
+            &self.default_placeholder,
+            content,
+        )?;
+
+        Ok(true)
     }
     pub fn format(&self) -> &MpdFormatter {
         &self.format
     }
     pub fn icons(&self) -> &StatusIconsSet {
         &self.icons
-    }
-    pub fn current_song(&self) -> Option<&Song> {
-        self.current_song.as_ref()
-    }
-    pub fn current_status(&self) -> &Status {
-        &self.current_status
     }
 }
 
@@ -382,29 +425,33 @@ impl MpdFormatter {
         Self(vec![Placeholder::String(str)])
     }
     pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> anyhow::Result<()> {
+        let lock = source.state.lock().unwrap();
         self.format(
             source.icons(),
-            source.current_song(),
-            source.current_status(),
+            lock.song.as_ref(),
+            &lock.status,
+            lock.update_time,
             &source.default_placeholder,
             f,
         )
     }
+
     pub fn format(
         &self,
         icons: &StatusIconsSet,
         song: Option<&Song>,
         status: &Status,
+        last_state_update_time: Instant,
         default: &str,
         f: &mut String,
     ) -> anyhow::Result<()> {
         for ph in self.iter() {
-            match ph.get(song, status) {
+            match ph.get(song, status, last_state_update_time) {
                 PlaceholderValue::String(s) => write!(f, "{}", s)?,
                 PlaceholderValue::OptionalString(s) => write!(f, "{}", s.unwrap_or(default))?,
                 PlaceholderValue::Volume(v) => write!(f, "{}", v)?,
                 PlaceholderValue::Len(l) => write!(f, "{}", l)?,
-                PlaceholderValue::OptionalDuration(op, fmt) => match op {
+                PlaceholderValue::OptionalDuration(op, fmt) | PlaceholderValue::OptionalElapsedDuration(op, fmt) => match op {
                     Some(d) => write!(
                         f,
                         "{}",

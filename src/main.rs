@@ -1,3 +1,4 @@
+#![feature(map_try_insert)]
 mod running_text;
 mod utils;
 mod text_source;
@@ -84,7 +85,6 @@ where T: Iterator<Item = &'a ArgToken> {
         SourceToken::Mpd(addr) => TextSource::Mpd(Box::new(MpdSource::from_args(*addr, _args.mpd)?)),
     })
 }
-
 
 fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText>> {
     // Create sources iteratively, from tokens (easier to parse positional arguments)
@@ -195,12 +195,11 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText
 
 fn main() -> anyhow::Result<()> {
     // TODO:
-    // - [WIP] support for multiple running texts (like each one has its own source etc)
+    // - [x] support for multiple running texts (like each one has its own source etc)
     //   need to delete prefix and suffix
-    //   also should use one client for mpd over several sources (poll in other thread,
+    // - [x] also should use one client for mpd over several sources (poll in other thread,
     //   asynchronoua)
-    // - support for long texts (without reading whole content)
-    // - --once option for run subcommand
+    // - [ ] easier reimplementation of RunningText
     let cli = command!(crate_name!())
         .about(crate_description!())
         .arg(arg!(-w --window <WINDOW> "Window size (if the corresponding source is string, will be equal to its length)")

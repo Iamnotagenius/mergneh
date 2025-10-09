@@ -468,7 +468,7 @@ impl MpdFormatter {
                     None => write!(f, "{}", default)?,
                 },
                 PlaceholderValue::OptionalQueuePlace(op) => match op {
-                    Some(qp) => write!(f, "{}", qp.id),
+                    Some(qp) => write!(f, "{}", qp.pos + 1),
                     None => write!(f, "{}", default),
                 }?,
                 PlaceholderValue::Bool(b) => icons.write_bool(ph, b, f)?,

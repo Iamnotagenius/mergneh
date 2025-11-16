@@ -56,6 +56,7 @@ pub enum ArgToken {
     Replacements(Vec<(String, String)>),
     Repeat(bool),
     Right(bool),
+    Reset(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +114,7 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<TextIter>> 
     let mut replacements = &replacements_default;
     let mut repeat = false;
     let mut right = false;
+    let mut reset = false;
 
     let mut result = vec![];
     let mut current_args = None;
@@ -131,6 +133,7 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<TextIter>> 
                         separator.clone(),
                         new_replacements,
                         right,
+                        reset,
                     ));
                     window = if let SourceToken::String(s) = source_token {
                         s.chars().count()
@@ -142,6 +145,7 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<TextIter>> 
                     replacements = &replacements_default;
                     repeat = false;
                     right = false;
+                    reset = false;
                 }
                 previous = Some((source_token, tokens, SourceArgs::default()));
                 current_args = previous.as_mut().map(|t| &mut t.2);
@@ -177,6 +181,9 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<TextIter>> 
             ArgToken::Right(r) => {
                 right = *r;
             },
+            ArgToken::Reset(r) => {
+                reset = *r;
+            },
         };
     }
     if let Some((source_token, tokens, args)) = previous {
@@ -190,6 +197,7 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<TextIter>> 
                 separator.clone(),
                 new_replacements,
                 right,
+                reset,
         ));
     }
     Ok(result)
@@ -225,6 +233,13 @@ fn main() -> anyhow::Result<()> {
         .arg(arg!(-R --right "Run text to the right")
             .value_parser(BoolValueParser::new()
                 .map(ArgToken::Right))
+            .num_args(0)
+            .default_value("false")
+            .default_missing_value("true")
+            .action(ArgAction::Append))
+        .arg(arg!(-t --reset "Reset text window after content changes")
+            .value_parser(BoolValueParser::new()
+                .map(ArgToken::Reset))
             .num_args(0)
             .default_value("false")
             .default_missing_value("true")
@@ -357,7 +372,11 @@ Useful for escaping special characters.")
 
             loop {
                 for (i, it) in iters.iter_mut().enumerate() {
-                    io::stdout().write(if fragments[i].right() {it.next_back()} else {it.next()}.unwrap().as_bytes())?;
+                    io::stdout().write(if fragments[i].right() {
+                        it.next_back()
+                    } else {
+                        it.next()
+                    }.unwrap().as_bytes())?;
                 }
                 io::stdout().write(line_terminator)?;
                 io::stdout().flush()?;
@@ -372,7 +391,10 @@ Useful for escaping special characters.")
                     let offset = iters[i].range().start;
                     texts[i] = fragments[i].new_text(content).into();
                     unsafe {
-                        iters[i] = (&*texts[i].get()).iter_at(offset);
+                        iters[i] = {
+                            let r = &*texts[i].get();
+                            if fragments[i].reset() { r.iter() } else { r.iter_at(offset) }
+                        };
                     }
                 }
 

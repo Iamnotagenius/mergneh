@@ -39,11 +39,11 @@ And in `mergneh_mpd.sh`:
 
 exec mg \
     -S '{"text":" ' \
-    --mpd -w 30 -s ' > ' -e '&=&amp;,"=&quot;' \
+    --mpd -w 30 -s ' > ' -e '&=&amp;,"=&quot;' -t \
     --mpd --format ' [{elapsedTime}/{totalTime}] {stateIcon}' \
     -S '","tooltip":"' \
     --mpd --format '{artist} - {title}: {album} ({date}) ({randomIcon:1}{repeatIcon:1}{singleIcon}{consumeIcon:1}) #{songPosition}/{queueLength}' \
-        -e '&=&amp;,"=&quot;' -w 1000 \
+        -e '&=&amp;,"=&quot;' -w 1000 -t \
     -S '"}' \
     run -n -d 100ms
 ```

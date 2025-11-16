@@ -7,6 +7,7 @@ pub struct TextIter {
     separator: String,
     replacements: Vec<(String, String)>,
     right: bool,
+    reset: bool,
 }
 
 impl TextIter {
@@ -17,6 +18,7 @@ impl TextIter {
         separator: String,
         replacements: Vec<(String, String)>,
         right: bool,
+        reset: bool,
     ) -> Self {
         Self {
             source,
@@ -25,6 +27,7 @@ impl TextIter {
             separator,
             replacements,
             right,
+            reset,
         }
     }
 
@@ -34,6 +37,10 @@ impl TextIter {
 
     pub fn right(&self) -> bool {
         self.right
+    }
+
+    pub fn reset(&self) -> bool {
+        self.reset
     }
 
     pub fn new_text(&self, mut content: String) -> RunningText {

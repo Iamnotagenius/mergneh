@@ -10,7 +10,7 @@ use chrono::{
 use clap::builder::{ValueParserFactory};
 use mpd::{song::QueuePlace, Client, Idle, Song, State, Status, Subsystem};
 
-use crate::{ArgToken, SourceArgToken};
+use crate::{text_source::TextSource, ArgToken, SourceArgToken};
 
 // Used for initializing threads for MPD pollers
 static ADDRS: Mutex<BTreeMap<SocketAddr, Arc<Mutex<MpdState>>>> = Mutex::new(BTreeMap::new());
@@ -383,40 +383,46 @@ impl MpdSource {
             default_placeholder,
         })
     }
-    pub fn get(
-        &mut self,
-        content: &mut String,
-    ) -> anyhow::Result<bool> {
-        let lock = match self.state.try_lock() {
-            Err(TryLockError::Poisoned(l)) => return Err(anyhow!(l.to_string()).context("another thread has panicked")),
-            Err(TryLockError::WouldBlock) => return Ok(false),
+}
+
+impl TextSource for MpdSource {
+    fn get(&mut self) -> anyhow::Result<String> {
+        let lock = match self.state.lock() {
+            Err(e) => {
+                println!("another thread has panicked");
+                e.into_inner()
+            },
             Ok(l) => l, 
         };
-
-        if lock.update_time == self.last_state_update_time &&
-            !self.format.iter().any(|ph| matches!(ph, Placeholder::ElapsedTime(_))) {
-            return Ok(false)
-        }
-
-        self.last_state_update_time = lock.update_time;
-
-        content.clear();
         self.format.format(
             &self.icons,
             lock.song.as_ref(),
             &lock.status,
             lock.update_time,
             &self.default_placeholder,
-            content,
-        )?;
+        )
+    }
+    fn get_if_changed(&mut self) -> Option<anyhow::Result<String>> {
+        let lock = match self.state.try_lock() {
+            Err(TryLockError::Poisoned(l)) => return Some(Err(anyhow!(l.to_string()).context("another thread has panicked"))),
+            Err(TryLockError::WouldBlock) => return None,
+            Ok(l) => l, 
+        };
 
-        Ok(true)
-    }
-    pub fn format(&self) -> &MpdFormatter {
-        &self.format
-    }
-    pub fn icons(&self) -> &StatusIconsSet {
-        &self.icons
+        if lock.update_time == self.last_state_update_time &&
+            !(self.format.iter().any(|ph| matches!(ph, Placeholder::ElapsedTime(_))) && lock.status.state == State::Play) {
+            return None
+        }
+
+        self.last_state_update_time = lock.update_time;
+
+        Some(self.format.format(
+            &self.icons,
+            lock.song.as_ref(),
+            &lock.status,
+            lock.update_time,
+            &self.default_placeholder,
+        ))
     }
 }
 
@@ -424,15 +430,14 @@ impl MpdFormatter {
     pub fn only_string(str: String) -> Self {
         Self(vec![Placeholder::String(str)])
     }
-    pub fn format_with_source(&self, source: &MpdSource, f: &mut String) -> anyhow::Result<()> {
+    pub fn format_with_source(&self, source: &MpdSource) -> anyhow::Result<String> {
         let lock = source.state.lock().unwrap();
         self.format(
-            source.icons(),
+            &source.icons,
             lock.song.as_ref(),
             &lock.status,
             lock.update_time,
             &source.default_placeholder,
-            f,
         )
     }
 
@@ -443,8 +448,8 @@ impl MpdFormatter {
         status: &Status,
         last_state_update_time: Instant,
         default: &str,
-        f: &mut String,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<String> {
+        let mut f = String::new();
         for ph in self.iter() {
             match ph.get(song, status, last_state_update_time) {
                 PlaceholderValue::String(s) => write!(f, "{}", s)?,
@@ -471,13 +476,13 @@ impl MpdFormatter {
                     Some(qp) => write!(f, "{}", qp.pos + 1),
                     None => write!(f, "{}", default),
                 }?,
-                PlaceholderValue::Bool(b) => icons.write_bool(ph, b, f)?,
+                PlaceholderValue::Bool(b) => icons.write_bool(ph, b, &mut f)?,
                 PlaceholderValue::State(s, pad) => {
                     write!(f, "{}{}", icons.state.get_icon(s), " ".repeat(pad))?
                 }
             };
         }
-        Ok(())
+        Ok(f)
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, Placeholder> {

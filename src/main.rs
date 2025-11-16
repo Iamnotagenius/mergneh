@@ -1,24 +1,24 @@
-#![feature(map_try_insert)]
+#![feature(map_try_insert, iter_advance_by)]
 mod running_text;
-mod utils;
+mod text_iter;
 mod text_source;
+mod cmd;
 #[cfg(feature = "mpd")]
 mod mpd;
 
 use std::{
-    collections::BTreeMap, ffi::OsString, fs, io::{self, Write}, iter::repeat_with, path::PathBuf, time::Duration
+    cell::UnsafeCell, collections::BTreeMap, ffi::OsString, fs, io::{self, Write}, thread::sleep, time::Duration
 };
 #[cfg(feature = "mpd")]
 use std::{net::SocketAddr};
 
 use anyhow::anyhow;
 use clap::{
-    arg, builder::{BoolValueParser, OsStringValueParser, StringValueParser, TypedValueParser}, command, crate_description, crate_name, parser::ValueSource, value_parser, ArgAction, ArgGroup, ArgMatches, Command, Id, ValueHint
+    arg, builder::{BoolValueParser, OsStringValueParser, StringValueParser, TypedValueParser}, command, crate_description, crate_name, parser::ValueSource, value_parser, ArgAction, ArgGroup, ArgMatches, Command, Id
 };
 use text_source::TextSource;
-use ticker::Ticker;
 
-use crate::{running_text::RunningText, text_source::{CmdSource}};
+use crate::{cmd::CmdSource, running_text::{RunIter, RunningText}, text_iter::TextIter};
 
 #[cfg(feature = "mpd")]
 use crate::mpd::{MpdArgToken, MpdSource, MpdSourceArgs};
@@ -55,7 +55,7 @@ pub enum ArgToken {
     Newline(String),
     Replacements(Vec<(String, String)>),
     Repeat(bool),
-    Reset(bool),
+    Right(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -70,23 +70,23 @@ pub struct SourceArgs {
     mpd: MpdSourceArgs,
 }
 
-fn source_from_token<'a, T>(token: &SourceToken, tokens: T, _args: SourceArgs) -> anyhow::Result<TextSource>
+fn source_from_token<'a, T>(token: &SourceToken, tokens: T, _args: SourceArgs) -> anyhow::Result<Box<dyn TextSource>>
 where T: Iterator<Item = &'a ArgToken> {
     Ok(match token {
-        SourceToken::String(s) => TextSource::content(s.to_owned()),
-        SourceToken::File(f) => TextSource::content(fs::read_to_string(f)?),
-        SourceToken::CmdArg(_) => TextSource::Cmd(CmdSource::new(tokens
-                .filter_map(|t| match t {
-                    ArgToken::Source(SourceToken::CmdArg(a)) => Some(a),
-                    _ => None,
-                }))),
-        SourceToken::Stdin => TextSource::content(io::read_to_string(io::stdin())?),
+        SourceToken::String(s) => Box::new(s.to_owned()),
+        SourceToken::File(f) => Box::new(fs::read_to_string(f)?),
+        SourceToken::CmdArg(_) => Box::new(CmdSource::new(tokens
+            .filter_map(|t| match t {
+                ArgToken::Source(SourceToken::CmdArg(a)) => Some(a),
+                _ => None,
+            }))),
+        SourceToken::Stdin => Box::new(io::read_to_string(io::stdin())?),
         #[cfg(feature = "mpd")]
-        SourceToken::Mpd(addr) => TextSource::Mpd(Box::new(MpdSource::from_args(*addr, _args.mpd)?)),
+        SourceToken::Mpd(addr) => Box::new(MpdSource::from_args(*addr, _args.mpd)?),
     })
 }
 
-fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText>> {
+fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<TextIter>> {
     // Create sources iteratively, from tokens (easier to parse positional arguments)
     let mut positional = BTreeMap::new();
     matches.ids()
@@ -112,7 +112,7 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText
     let mut newline = &newline_default;
     let mut replacements = &replacements_default;
     let mut repeat = false;
-    let mut reset = false;
+    let mut right = false;
 
     let mut result = vec![];
     let mut current_args = None;
@@ -122,15 +122,16 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText
             ArgToken::Source(source_token) => {
                 if let Some((source_token, tokens, args)) = previous {
                     let new_source = source_from_token(source_token, tokens, args)?;
-                    result.push(RunningText::new(
+                    let mut new_replacements = replacements.clone();
+                    new_replacements.push(("\n".to_owned(), newline.to_owned()));
+                    result.push(TextIter::new(
                         new_source,
                         window as usize,
-                        separator.clone(),
-                        newline.clone(),
-                        replacements.clone(),
                         repeat,
-                        reset,
-                    )?);
+                        separator.clone(),
+                        new_replacements,
+                        right,
+                    ));
                     window = if let SourceToken::String(s) = source_token {
                         s.chars().count()
                     } else {
@@ -140,7 +141,7 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText
                     newline = &newline_default;
                     replacements = &replacements_default;
                     repeat = false;
-                    reset = false;
+                    right = false;
                 }
                 previous = Some((source_token, tokens, SourceArgs::default()));
                 current_args = previous.as_mut().map(|t| &mut t.2);
@@ -173,33 +174,28 @@ fn text_from_matches(matches: &mut ArgMatches) -> anyhow::Result<Vec<RunningText
             ArgToken::Repeat(r) => {
                 repeat = *r;
             },
-            ArgToken::Reset(r) => {
-                reset = *r;
+            ArgToken::Right(r) => {
+                right = *r;
             },
         };
     }
     if let Some((source_token, tokens, args)) = previous {
         let new_source = source_from_token(source_token, tokens, args)?;
-        result.push(RunningText::new(
-            new_source,
-            window as usize,
-            separator.clone(),
-            newline.clone(),
-            replacements.clone(),
-            repeat,
-            reset,
-        )?);
+        let mut new_replacements = replacements.clone();
+        new_replacements.push(("\n".to_owned(), newline.to_owned()));
+        result.push(TextIter::new(
+                new_source,
+                window as usize,
+                repeat,
+                separator.clone(),
+                new_replacements,
+                right,
+        ));
     }
     Ok(result)
 }
 
 fn main() -> anyhow::Result<()> {
-    // TODO:
-    // - [x] support for multiple running texts (like each one has its own source etc)
-    //   need to delete prefix and suffix
-    // - [x] also should use one client for mpd over several sources (poll in other thread,
-    //   asynchronoua)
-    // - [ ] easier reimplementation of RunningText
     let cli = command!(crate_name!())
         .about(crate_description!())
         .arg(arg!(-w --window <WINDOW> "Window size (if the corresponding source is string, will be equal to its length)")
@@ -226,19 +222,17 @@ fn main() -> anyhow::Result<()> {
             .default_value("false")
             .default_missing_value("true")
             .action(ArgAction::Append))
-        .arg(arg!(--"reset-on-change" "Reset text window on content change")
+        .arg(arg!(-R --right "Run text to the right")
             .value_parser(BoolValueParser::new()
-                .map(ArgToken::Reset))
+                .map(ArgToken::Right))
             .num_args(0)
             .default_value("false")
             .default_missing_value("true")
             .action(ArgAction::Append))
         .arg(arg!(-e --replacements <REPLACE> "Key-value pairs of replacements. Specified as 'src=dest'.
-Multiple replacements can be passed either as one argument separated by comma: -e src1=dest1,src2=dest2
-or as separated arguments: -e src1=dest1 -e src2=dest2.
-Order of replacements matters. Useful for escaping special characters.")
+Multiple replacements can be passed one argument separated by comma: -e src1=dest1,src2=dest2.
+Useful for escaping special characters.")
              .value_parser(parse_key_value_pairs)
-             .default_value("")
              .action(ArgAction::Append))
         .next_help_heading("Sources")
         .group(
@@ -273,14 +267,6 @@ Order of replacements matters. Useful for escaping special characters.")
                      .default_value("1s"))
                 .arg(arg!(-n --newline "Print each iteration on next line"))
                 .about("Run text in a terminal")
-        )
-        .subcommand(
-            Command::new("iter")
-                .arg(arg!(<ITER_FILE> "File containing data for next iteration")
-                     .value_parser(value_parser!(PathBuf))
-                     .value_hint(ValueHint::FilePath))
-                .about("Print just one iteration")
-                .arg_required_else_help(true),
         );
     #[cfg(feature = "mpd")] 
     let cli = cli
@@ -351,51 +337,49 @@ Order of replacements matters. Useful for escaping special characters.")
                 .remove_one::<humantime::Duration>("duration")
                 .unwrap().into();
             let line_terminator = if sub_matches.remove_one("newline").unwrap() {
-                '\n'
+                &['\n' as u8]
             } else {
-               '\r' 
+                &['\r' as u8]
             };
-            let tick = Ticker::new(
-                repeat_with(|| fragments
-                    .iter_mut()
-                    .map(|f| f.next().unwrap())
-                    
-                    .fold(Ok(String::new()), |s, r| match (s, r) {
-                        (Ok(mut s), Ok(f)) => Ok({s.push_str(f.as_str()); s}),
-                        (Ok(_), Err(e)) => Err(e),
-                        (Err(e), _) => Err(e)
-                    })
-                ),
-                duration);
-            for text in tick {
-                let mut text = text?;
-                text.push(line_terminator);
-                io::stdout().write(text.as_bytes())?;
+
+            let mut texts: Vec<UnsafeCell<RunningText>> = fragments
+                .iter_mut()
+                .map(|f| anyhow::Ok({
+                    let content = f.source().get()?;
+                    UnsafeCell::new(f.new_text(content))
+                }))
+                .collect::<anyhow::Result<_>>()?;
+
+            let mut iters: Vec<RunIter<'_>> = texts
+                .iter()
+                .map(|r| unsafe { (&*r.get()).iter() })
+                .collect();
+
+            loop {
+                for (i, it) in iters.iter_mut().enumerate() {
+                    io::stdout().write(if fragments[i].right() {it.next_back()} else {it.next()}.unwrap().as_bytes())?;
+                }
+                io::stdout().write(line_terminator)?;
                 io::stdout().flush()?;
+
+                let changes: Vec<(usize, String)> = fragments
+                    .iter_mut()
+                    .enumerate()
+                    .filter_map(|(i, f)| f.source().next().map(|t| anyhow::Ok((i, t?))))
+                    .collect::<anyhow::Result<_>>()?;
+
+                for (i, content) in changes {
+                    let offset = iters[i].range().start;
+                    texts[i] = fragments[i].new_text(content).into();
+                    unsafe {
+                        iters[i] = (&*texts[i].get()).iter_at(offset);
+                    }
+                }
+
+
+                sleep(duration);
             }
-        }
-        "iter" => {
-            let iter_file = sub_matches.remove_one::<PathBuf>("ITER_FILE").unwrap();
-            let (_i, _prev_content) = match fs::read_to_string(&iter_file) {
-                Ok(s) => match s.split_once(' ') {
-                    Some((number, content)) => (
-                        number
-                            .parse::<usize>()
-                            .map_err(|e| anyhow::anyhow!(e).context("Failed parsing iter file"))?,
-                        content.to_owned(),
-                    ),
-                    _ => Err(anyhow::anyhow!("Wrong iter file format, it should be '<i> <prev_content>").context("Failed parsing iter file"))?,
-                },
-                Err(e) => match e.kind() {
-                    io::ErrorKind::NotFound => (0, String::new()),
-                    _ => return Err(e.into()),
-                },
-            };
-            // let i = text.print_once(i, prev_content.as_str())?;
-            // fs::write(iter_file, format!("{i} {}", text.get_raw_content()))?;
-        }
+        },
         _ => unreachable!(),
     }
-
-    Ok(())
 }

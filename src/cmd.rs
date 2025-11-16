@@ -3,40 +3,11 @@ use std::{
     ffi::OsStr,
     fmt::Display,
     io,
-    iter::repeat,
     process::{self, Child, Stdio},
     string::FromUtf8Error,
 };
 
-pub fn replace_newline(text: &mut String, replacement: &str) {
-    text.retain(|c| c != '\r');
-    if replacement.is_empty() {
-        text.retain(|c| c != '\n');
-        return;
-    }
-    let newline_count = text.chars().filter(|&c| c == '\n').count();
-    let additional_len = (replacement.len() - 1) * newline_count;
-    text.reserve(additional_len);
-    text.extend(repeat('\0').take(additional_len));
-
-    let mut dest = text.len();
-    let mut src = text.len() - additional_len;
-
-    unsafe {
-        let buffer = text.as_bytes_mut();
-        while src >= 1 {
-            src -= 1;
-            let byte = buffer[src];
-            if byte == b'\n' {
-                dest -= replacement.len();
-                buffer[dest..dest + replacement.len()].copy_from_slice(replacement.as_bytes());
-            } else {
-                dest -= 1;
-                buffer[dest] = byte;
-            }
-        }
-    }
-}
+use crate::text_source::TextSource;
 
 #[derive(Debug)]
 pub struct Command(process::Command);
@@ -92,5 +63,46 @@ impl From<Command> for process::Command {
 impl From<process::Command> for Command {
     fn from(value: process::Command) -> Self {
         Command(value)
+    }
+}
+
+#[derive(Debug)]
+pub struct CmdSource {
+    pub cmd: Command,
+    last_output: String,
+}
+
+impl CmdSource {
+    pub fn new<S: AsRef<OsStr>, I: IntoIterator<Item = S>>(
+        args: I,
+    ) -> Self {
+        Self {
+            cmd: args.into_iter().collect(),
+            last_output: String::new(),
+        }
+    }
+}
+
+impl TextSource for CmdSource {
+    fn get(&mut self) -> anyhow::Result<String> {
+        if !self.last_output.is_empty() {
+            Ok(self.last_output.clone())
+        } else {
+            self.get_if_changed().unwrap_or_else(|| Ok(String::new()))
+        }
+    }
+    fn get_if_changed(&mut self) -> Option<anyhow::Result<String>> {
+        let output = self.cmd.spawn_and_read_output();
+        if let Err(e) = output {
+            return Some(Err(e.into()));
+        }
+
+        let output = output.unwrap();
+        if self.last_output == output {
+            None
+        } else {
+            output.clone_into(&mut self.last_output);
+            Some(Ok(output))
+        }
     }
 }

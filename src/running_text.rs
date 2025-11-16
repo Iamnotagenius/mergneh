@@ -1,183 +1,372 @@
-use std::{fmt::Write};
-
-use crate::{
-    utils::replace_newline,
-    TextSource,
-};
+use std::{collections::BTreeMap, ops::{AddAssign, Range, SubAssign}, slice::SliceIndex, str::CharIndices};
 
 #[derive(Debug)]
 pub struct RunningText {
-    source: TextSource,
-    content: String,
-    newline: String,
-    separator: String,
-    replacements: Vec<(String, String)>,
-    window_size: usize,
+    s: String,
+    w: usize,
     repeat: bool,
-    reset_on_change: bool,
-    text: String,
-    full_content_char_len: usize,
-    content_char_len: usize,
-    i: usize,
-    byte_offset: usize,
+    left_escape_bounds: BTreeMap<usize, usize>,
+    right_escape_bounds: BTreeMap<usize, usize>,
 }
 
 impl RunningText {
-    pub fn new(
-        mut source: TextSource,
-        window_size: usize,
-        mut separator: String,
-        newline: String,
-        replacements: Vec<(String, String)>,
-        repeat: bool,
-        reset_on_change: bool,
-    ) -> anyhow::Result<Self> {
-        let mut content = source.get_initial_content()?;
-        replace_newline(&mut content, &newline);
-        replace_newline(&mut separator, &newline);
-        let content_len = content.len();
-        let count = content.chars().count();
-        content += &separator;
-        let mut new = RunningText {
-            source,
-            text: String::new(),
-            full_content_char_len: count + content[content_len..].chars().count(),
-            content,
-            newline,
-            separator,
-            replacements,
-            window_size,
-            repeat,
-            reset_on_change,
-            content_char_len: count,
-            i: 0,
-            byte_offset: 0,
-        };
-        if new.does_content_fit() {
-            new.text.write_str(&new.content[..content_len])?;
-            new.apply_replacements();
-        }
-        Ok(new)
-    }
-    fn does_content_fit(&self) -> bool {
-        !self.repeat && self.window_size >= self.content_char_len
-    }
-    fn apply_replacements(&mut self) {
-        for (src, dest) in self.replacements.iter() {
-            let ranges = self
-                .text
+    pub fn new<S: AsRef<str>>(mut string: String, w: usize, repeat: bool, escapes: &[(S, S)]) -> Self {
+        let mut char_count = string.chars().count();
+        char_count -= escapes
+            .iter()
+            .filter_map(|(src, dest)| src.as_ref().len().checked_sub(dest.as_ref().len()).filter(|l| *l > 0))
+            .sum::<usize>();
+        let repeat = repeat || char_count > w;
+        let (q, r) = ((w - 1) / char_count, (w - 1) % char_count);
+        let mut left_escape_bounds = BTreeMap::new();
+        let mut right_escape_bounds = BTreeMap::new();
+
+        for (src, dest) in escapes.iter().map(|(src, dest)| (src.as_ref(), dest.as_ref())) {
+            let matches: Vec<_> = string
                 .match_indices(src)
                 .enumerate()
-                .map(|(i, (j, m))| {
-                    let diff = (dest.len() as isize - src.len() as isize) * i as isize;
-                    j.saturating_add_signed(diff)..(j + m.len()).saturating_add_signed(diff)
-                })
-                .collect::<Vec<_>>();
-            for range in ranges {
-                self.text.replace_range(range, dest);
+                .map(|(i, (m, _))| (m as i64 + i as i64 * (dest.len() as i64 - src.len() as i64)) as usize)
+                .collect();
+
+            for &i in &matches {
+                string.replace_range(i..i + src.len(), dest);
+            }
+
+            if repeat {
+                left_escape_bounds.extend(matches.iter().filter_map(|&i| (!dest.is_empty()).then_some((i, dest.len()))));
+                right_escape_bounds.extend(matches.iter().filter_map(|&i| (!dest.is_empty()).then_some((i + dest.len(), dest.len()))));
             }
         }
+        if !repeat {
+            return Self {
+                s: string,
+                w,
+                repeat: false,
+                left_escape_bounds,
+                right_escape_bounds,
+            }
+        }
+        for _ in 0..q {
+            string.extend_from_within(..);
+        }
+        left_escape_bounds.extend(escapes
+            .iter()
+            .map(|(_, d)| string
+                .match_indices(d.as_ref())
+                .filter_map(|(i, _)| (!d.as_ref().is_empty()).then_some((i, d.as_ref().len()))))
+            .flatten());
+        right_escape_bounds.extend(escapes
+            .iter()
+            .map(|(_, d)| string
+                .match_indices(d.as_ref())
+                .filter_map(|(i, _)| (!d.as_ref().is_empty()).then_some((i + d.as_ref().len(), d.as_ref().len()))))
+            .flatten());
+
+        let mut off = string.char_indices();
+        for _ in 0..r {
+            let current_off = off.offset();
+            match left_escape_bounds.get(&current_off) {
+                Some(&len) => {
+                    off.by_ref().skip(len - 1).next();
+                    left_escape_bounds.insert(current_off + string.len(), len);
+                    right_escape_bounds.insert(
+                        current_off +
+                        string.len() +
+                        len,
+                        len
+                    );
+                },
+                None => {
+                    off.next();
+                },
+            };
+        }
+        string.extend_from_within(..off.offset());
+        Self {
+            s: string,
+            w,
+            repeat: true,
+            left_escape_bounds,
+            right_escape_bounds,
+        }
     }
-    fn get_new_content(&mut self) -> anyhow::Result<bool> {
-        let changed = self.source.get_content(
-            &mut self.content,
-        )?;
-        if !changed {
-            return Ok(false);
+
+    pub fn iter(&self) -> RunIter<'_> {
+        if !self.repeat {
+            return RunIter {
+                s: &self.s,
+                init_left_off: 0,
+                init_right_off: self.s.len(),
+                left_escape_bounds: &self.left_escape_bounds,
+                right_escape_bounds: &self.right_escape_bounds,
+                left_off: RunIndex::new(&self.s, 0, &self.left_escape_bounds, &self.right_escape_bounds),
+                right_off: RunIndex::new(&self.s, self.s.len(), &self.left_escape_bounds, &self.right_escape_bounds),
+            };
         }
-        replace_newline(&mut self.content, &self.newline);
-        self.content_char_len = self.content.chars().count();
-        self.content += &self.separator;
-        self.full_content_char_len = self.content_char_len + self.separator.chars().count();
-        if self.reset_on_change {
-            self.i = 0;
-            self.byte_offset = 0;
+        let (left_off, right_off) = {
+            let mut left = RunIndex::new(
+                &self.s,
+                self.s.len(),
+                &self.left_escape_bounds,
+                &self.right_escape_bounds,
+            );
+            let left = left
+                .advance_back_by(self.w)
+                .ok()
+                .and_then(|()| left.next_back())
+                .unwrap_or_default();
+            let mut right = RunIndex::new(
+                &self.s,
+                0,
+                &self.left_escape_bounds,
+                &self.right_escape_bounds,
+            );
+            let right = right
+                .advance_by(self.w)
+                .ok()
+                .and_then(|()| right.next())
+                .unwrap_or(self.s.len());
+            (left, right)
+        };
+        RunIter {
+            s: &self.s,
+            init_left_off: left_off,
+            init_right_off: right_off,
+            left_escape_bounds: &self.left_escape_bounds,
+            right_escape_bounds: &self.right_escape_bounds,
+            left_off: RunIndex::new(&self.s, 0, &self.left_escape_bounds, &self.right_escape_bounds),
+            right_off: RunIndex::new(&self.s, right_off, &self.left_escape_bounds, &self.right_escape_bounds),
+        }
+    }
+
+    pub fn iter_at(&self, idx: usize) -> RunIter<'_> {
+        if !self.repeat {
+            return RunIter {
+                s: &self.s,
+                init_left_off: 0,
+                init_right_off: self.s.len(),
+                left_escape_bounds: &self.left_escape_bounds,
+                right_escape_bounds: &self.right_escape_bounds,
+                left_off: RunIndex::new(&self.s, 0, &self.left_escape_bounds, &self.right_escape_bounds),
+                right_off: RunIndex::new(&self.s, self.s.len(), &self.left_escape_bounds, &self.right_escape_bounds),
+            };
+        }
+        let (left_off, right_off) = {
+            let mut left = RunIndex::new(
+                &self.s,
+                self.s.len(),
+                &self.left_escape_bounds,
+                &self.right_escape_bounds,
+            );
+            let left = left
+                .advance_back_by(self.w)
+                .ok()
+                .and_then(|()| left.next_back())
+                .unwrap_or_default();
+            let mut right = RunIndex::new(
+                &self.s,
+                0,
+                &self.left_escape_bounds,
+                &self.right_escape_bounds,
+            );
+            let right = right
+                .advance_by(self.w)
+                .ok()
+                .and_then(|()| right.next())
+                .unwrap_or(self.s.len());
+            (left, right)
+        };
+        let mut off = self.left_escape_bounds
+            .iter()
+            .find_map(|(&i, &len)| (i..i + len).contains(&idx).then_some(i))
+            .unwrap_or(self.s.floor_char_boundary(idx));
+        let off_right;
+        let mut off_right_it = RunIndex::new(&self.s, off, &self.left_escape_bounds, &self.right_escape_bounds);
+        if let Some(o) = off_right_it.advance_by(self.w).ok().and_then(|()| off_right_it.next()) {
+            off_right = o;
         } else {
-            self.i %= self.full_content_char_len;
-            self.byte_offset = self.content.char_indices().nth(self.i).unwrap().0;
+            off = 0;
+            off_right = right_off;
         }
-        Ok(true)
+        RunIter {
+            s: &self.s,
+            init_left_off: left_off,
+            init_right_off: right_off,
+            left_escape_bounds: &self.left_escape_bounds,
+            right_escape_bounds: &self.right_escape_bounds,
+            left_off: RunIndex::new(&self.s, off, &self.left_escape_bounds, &self.right_escape_bounds),
+            right_off: RunIndex::new(&self.s, off_right, &self.left_escape_bounds, &self.right_escape_bounds),
+        }
     }
 }
 
-impl Iterator for RunningText {
-    type Item = anyhow::Result<String>;
+impl<'a> IntoIterator for &'a RunningText {
+    type IntoIter = RunIter<'a>;
+    type Item = &'a str;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+struct RunIndex<'a> {
+    s: &'a str,
+    offset: usize,
+    left_escape_bounds: &'a BTreeMap<usize, usize>,
+    right_escape_bounds: &'a BTreeMap<usize, usize>,
+    end: bool,
+}
+
+impl<'a> RunIndex<'a>  {
+    pub fn new(
+        s: &'a str,
+        offset: usize,
+        left_escape_bounds: &'a BTreeMap<usize, usize>,
+        right_escape_bounds: &'a BTreeMap<usize, usize>,
+    ) -> Self {
+        Self {
+            s,
+            offset,
+            left_escape_bounds,
+            right_escape_bounds,
+            end: false,
+        }
+    }
+    pub fn peek(&self) -> usize {
+        self.offset
+    }
+    fn step<TRange, FNext, Op>(
+        &mut self,
+        range: TRange,
+        next: FNext,
+        escape_bounds: &'a BTreeMap<usize, usize>,
+        op: Op,
+    )
+        where
+            TRange: SliceIndex<str, Output = str>,
+            FNext: Fn(&mut CharIndices<'a>) -> Option<(usize, char)>,
+            Op: Fn(&mut usize, usize),
+    {
+        let s = &self.s[range];
+        if let Some(step) = next(&mut s
+            .char_indices())
+            .map(|(_, c)| match escape_bounds.get(&self.offset) {
+                Some(&len) => len,
+                None => c.len_utf8(),
+            }) {
+                op(&mut self.offset, step);
+            } else {
+                self.end = true;
+        }
+    }
+}
+
+impl<'a> Iterator for RunIndex<'a> {
+    type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let changed = match self.get_new_content() {
-            Ok(c) => c,
-            Err(e) => return Some(Err(e)),
-        };
-        if self.content.is_empty() {
+        if self.end {
             return None;
         }
-        if self.does_content_fit() {
-            if changed {
-                self.text.clear();
-                if let Err(e) = self.text.write_str(&self.content[..self.content.len() - self.separator.len()]) {
-                    return Some(Err(e.into()));
-                };
-                self.apply_replacements();
-            }
-            return Some(Ok(self.text.to_owned()));
-        }
-        self.text.clear();
-        self.text.extend(
-            self.content[self.byte_offset..]
-                .chars()
-                .take(self.window_size),
+        let i = self.offset;
+        self.step(
+            self.offset..,
+            CharIndices::next,
+            self.left_escape_bounds,
+            AddAssign::add_assign,
         );
-
-        let mut remainder = self
-            .window_size
-            .saturating_sub(self.full_content_char_len - self.i);
-        while remainder >= self.full_content_char_len {
-            self.text.push_str(&self.content);
-            remainder -= self.full_content_char_len;
-        }
-        self.text.extend(self.content.chars().take(remainder));
-        self.i += 1;
-        self.i %= self.full_content_char_len;
-        self.byte_offset += &self.content[self.byte_offset..]
-            .chars()
-            .next()
-            .map(char::len_utf8)
-            .unwrap_or_default();
-        self.byte_offset %= self.content.len();
-        self.apply_replacements();
-        Some(Ok(self.text.clone()))
+        Some(i)
     }
 }
+
+impl<'a> DoubleEndedIterator for RunIndex<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.end {
+            return None;
+        }
+        let i = self.offset;
+        self.step(
+            ..self.offset,
+            CharIndices::next_back,
+            self.right_escape_bounds,
+            SubAssign::sub_assign,
+        );
+        Some(i)
+    }
+}
+
+pub struct RunIter<'a> {
+    s: &'a str,
+    init_left_off: usize,
+    init_right_off: usize,
+    left_escape_bounds: &'a BTreeMap<usize, usize>,
+    right_escape_bounds: &'a BTreeMap<usize, usize>,
+    left_off: RunIndex<'a>,
+    right_off: RunIndex<'a>,
+}
+
+impl<'a> RunIter<'a> {
+    pub fn range(&self) -> Range<usize> {
+        self.left_off.peek()..self.right_off.peek()
+    }
+    pub fn get(&self) -> &'a str {
+        &self.s[self.range()]
+    }
+}
+
+impl<'a> Iterator for RunIter<'a> {
+    type Item = &'a str;
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(match (self.left_off.next(), self.right_off.next()) {
+            (Some(left), Some(right)) => &self.s[left..right],
+            (Some(_), None) => {
+                self.left_off = RunIndex::new(self.s, 0, self.left_escape_bounds, self.right_escape_bounds);
+                self.right_off = RunIndex::new(self.s, self.init_right_off, self.left_escape_bounds, self.right_escape_bounds);
+                &self.s[self.left_off.next().unwrap()..self.right_off.next().unwrap()]
+            } 
+            _ => unreachable!(),
+        })
+    }
+}
+
+impl<'a> DoubleEndedIterator for RunIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        Some(match (self.left_off.next_back(), self.right_off.next_back()) {
+            (Some(left), Some(right)) => &self.s[left..right],
+            (None, Some(_)) => {
+                self.left_off = RunIndex::new(self.s, self.init_left_off, self.left_escape_bounds, self.right_escape_bounds);
+                self.right_off = RunIndex::new(self.s, self.s.len(), self.left_escape_bounds, self.right_escape_bounds);
+                &self.s[self.left_off.next_back().unwrap()..self.right_off.next_back().unwrap()]
+            } 
+            _ => unreachable!(),
+        })
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
     use anyhow::{Ok, Result};
 
-    use crate::text_source::TextSource;
-
     use super::RunningText;
 
     macro_rules! assert_text {
-        ($var:ident, $($iter:literal),+) => {
-            $(assert_eq!($var.next().unwrap()?, $iter));+
+        ($it:expr, $($iter:literal),+) => {
+            let mut it = $it;
+            $(assert_eq!(it.next().unwrap(), $iter));+
         }
     }
 
     #[test]
     fn one_full_cycle() -> Result<()> {
-        let mut text = RunningText::new(
-            TextSource::content(
-                "I am a running text".to_owned(),
-            ),
+        let text = RunningText::new::<&str>(
+
+            "I am a running text|".to_owned(),
             12,
-            "|".to_owned(),
-            "".to_owned(),
-            vec![],
-            false,
-            false,
-        )?;
+            true,
+            &[],
+        );
         assert_text!(
-            text,
+            text.iter(),
             "I am a runni",
             " am a runnin",
             "am a running",
@@ -204,20 +393,87 @@ mod tests {
     }
 
     #[test]
-    fn with_repeat() -> Result<()> {
-        let mut text = RunningText::new(
-            TextSource::content(
-                "I am a running text".to_owned(),
-            ),
-            25,
-            "|".to_owned(),
-            "".to_owned(),
-            vec![],
+    fn one_full_cycle_backwards() -> Result<()> {
+        let text = RunningText::new::<&str>(
+
+            "I am a running text|".to_owned(),
+            12,
             true,
-            false,
-        )?;
+            &[],
+        );
         assert_text!(
-            text,
+            text.iter().rev(),
+            "I am a runni",
+            "|I am a runn",
+            "t|I am a run",
+            "xt|I am a ru",
+            "ext|I am a r",
+            "text|I am a ",
+            " text|I am a",
+            "g text|I am ",
+            "ng text|I am",
+            "ing text|I a",
+            "ning text|I ",
+            "nning text|I",
+            "unning text|",
+            "running text",
+            " running tex",
+            "a running te",
+            " a running t",
+            "m a running ",
+            "am a running",
+            " am a runnin",
+            "I am a runni"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn one_full_cycle_at() -> Result<()> {
+        let text = RunningText::new::<&str>(
+
+            "I am a running text|".to_owned(),
+            12,
+            true,
+            &[],
+        );
+        assert_text!(
+            text.iter_at(5),
+            "a running te",
+            " running tex",
+            "running text",
+            "unning text|",
+            "nning text|I",
+            "ning text|I ",
+            "ing text|I a",
+            "ng text|I am",
+            "g text|I am ",
+            " text|I am a",
+            "text|I am a ",
+            "ext|I am a r",
+            "xt|I am a ru",
+            "t|I am a run",
+            "|I am a runn",
+            "I am a runni",
+            " am a runnin",
+            "am a running",
+            "m a running ",
+            " a running t",
+            "a running te"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_repeat() -> Result<()> {
+        let text = RunningText::new::<&str>(
+            "I am a running text|".to_owned(),
+            25,
+            true,
+            &[],
+        );
+        assert_text!(
+            text.iter(),
             "I am a running text|I am ",
             " am a running text|I am a",
             "am a running text|I am a ",
@@ -244,103 +500,239 @@ mod tests {
     }
 
     #[test]
-    fn special_chars() -> Result<()> {
-        let mut text = RunningText::new(
-            TextSource::content("?#@!$%^^&*()".to_owned()),
-            12,
-            "".to_owned(),
-            "".to_owned(),
-            vec![],
+    fn with_repeat_backwards() -> Result<()> {
+        let text = RunningText::new::<&str>(
+            "I am a running text|".to_owned(),
+            25,
             true,
-            false,
-        )?;
+            &[],
+        );
         assert_text!(
-            text,
-            "$ ?#@!$%^^&*() &<",
-            "$ #@!$%^^&*()? &<",
-            "$ @!$%^^&*()?# &<",
-            "$ !$%^^&*()?#@ &<",
-            "$ $%^^&*()?#@! &<",
-            "$ %^^&*()?#@!$ &<",
-            "$ ^^&*()?#@!$% &<",
-            "$ ^&*()?#@!$%^ &<",
-            "$ &*()?#@!$%^^ &<",
-            "$ *()?#@!$%^^& &<",
-            "$ ()?#@!$%^^&* &<",
-            "$ )?#@!$%^^&*( &<",
-            "$ ?#@!$%^^&*() &<",
-            "$ #@!$%^^&*()? &<",
-            "$ @!$%^^&*()?# &<",
-            "$ !$%^^&*()?#@ &<"
+            text.iter().rev(),
+            "I am a running text|I am ",
+            "|I am a running text|I am",
+            "t|I am a running text|I a",
+            "xt|I am a running text|I ",
+            "ext|I am a running text|I",
+            "text|I am a running text|",
+            " text|I am a running text",
+            "g text|I am a running tex",
+            "ng text|I am a running te",
+            "ing text|I am a running t",
+            "ning text|I am a running ",
+            "nning text|I am a running",
+            "unning text|I am a runnin",
+            "running text|I am a runni",
+            " running text|I am a runn",
+            "a running text|I am a run",
+            " a running text|I am a ru",
+            "m a running text|I am a r",
+            "am a running text|I am a ",
+            " am a running text|I am a",
+            "I am a running text|I am "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn special_chars() -> Result<()> {
+        let text = RunningText::new::<&str>(
+            "?#@!$%^^&*()".to_owned(),
+            12,
+            true,
+            &[],
+        );
+        assert_text!(
+            text.iter(),
+            "?#@!$%^^&*()",
+            "#@!$%^^&*()?",
+            "@!$%^^&*()?#",
+            "!$%^^&*()?#@",
+            "$%^^&*()?#@!",
+            "%^^&*()?#@!$",
+            "^^&*()?#@!$%",
+            "^&*()?#@!$%^",
+            "&*()?#@!$%^^",
+            "*()?#@!$%^^&",
+            "()?#@!$%^^&*",
+            ")?#@!$%^^&*(",
+            "?#@!$%^^&*()",
+            "#@!$%^^&*()?",
+            "@!$%^^&*()?#",
+            "!$%^^&*()?#@"
         );
         Ok(())
     }
 
     #[test]
     fn replacement() -> Result<()> {
-        let mut text = RunningText::new(
-            TextSource::content("?#@!$%^^&*()".to_owned()),
+        let text = RunningText::new(
+            "?#@!$%^^&*()".to_owned(),
             12,
-            "".to_owned(),
-            "".to_owned(),
-            vec![
-                ("&".to_owned(), "&amp".to_owned()),
-                ("()".to_owned(), "b".to_owned()),
-            ],
             true,
-            false,
-        )?;
+            &[
+                ("&", "&amp"),
+            ],
+        );
         assert_text!(
-            text,
-            "?#@!$%^^&amp*b",
-            "#@!$%^^&amp*b?",
-            "@!$%^^&amp*b?#",
-            "!$%^^&amp*b?#@",
-            "$%^^&amp*b?#@!",
-            "%^^&amp*b?#@!$",
-            "^^&amp*b?#@!$%",
-            "^&amp*b?#@!$%^",
-            "&amp*b?#@!$%^^",
-            "*b?#@!$%^^&amp",
-            "b?#@!$%^^&amp*",
+            text.iter(),
+            "?#@!$%^^&amp*()",
+            "#@!$%^^&amp*()?",
+            "@!$%^^&amp*()?#",
+            "!$%^^&amp*()?#@",
+            "$%^^&amp*()?#@!",
+            "%^^&amp*()?#@!$",
+            "^^&amp*()?#@!$%",
+            "^&amp*()?#@!$%^",
+            "&amp*()?#@!$%^^",
+            "*()?#@!$%^^&amp",
+            "()?#@!$%^^&amp*",
             ")?#@!$%^^&amp*(",
-            "?#@!$%^^&amp*b",
-            "#@!$%^^&amp*b?",
-            "@!$%^^&amp*b?#",
-            "!$%^^&amp*b?#@"
+            "?#@!$%^^&amp*()",
+            "#@!$%^^&amp*()?",
+            "@!$%^^&amp*()?#",
+            "!$%^^&amp*()?#@"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_at() -> Result<()> {
+        let text = RunningText::new(
+            "?#@!$%^^&*()".to_owned(),
+            12,
+            true,
+            &[
+                ("&", "&amp"),
+            ],
+        );
+        assert_text!(
+            text.iter_at(10),
+            "&amp*()?#@!$%^^",
+            "*()?#@!$%^^&amp",
+            "()?#@!$%^^&amp*",
+            ")?#@!$%^^&amp*(",
+            "?#@!$%^^&amp*()",
+            "#@!$%^^&amp*()?",
+            "@!$%^^&amp*()?#",
+            "!$%^^&amp*()?#@",
+            "$%^^&amp*()?#@!",
+            "%^^&amp*()?#@!$",
+            "^^&amp*()?#@!$%",
+            "^&amp*()?#@!$%^",
+            "&amp*()?#@!$%^^",
+            "*()?#@!$%^^&amp",
+            "()?#@!$%^^&amp*",
+            ")?#@!$%^^&amp*("
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_backwards() -> Result<()> {
+        let text = RunningText::new(
+            "?#@!$%^^&*()".to_owned(),
+            12,
+            true,
+            &[
+                ("&", "&amp"),
+            ],
+        );
+        assert_text!(
+            text.iter().rev(),
+            "?#@!$%^^&amp*()",
+            ")?#@!$%^^&amp*(",
+            "()?#@!$%^^&amp*",
+            "*()?#@!$%^^&amp",
+            "&amp*()?#@!$%^^",
+            "^&amp*()?#@!$%^",
+            "^^&amp*()?#@!$%",
+            "%^^&amp*()?#@!$",
+            "$%^^&amp*()?#@!",
+            "!$%^^&amp*()?#@",
+            "@!$%^^&amp*()?#",
+            "#@!$%^^&amp*()?",
+            "?#@!$%^^&amp*()"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_backwards_at() -> Result<()> {
+        let text = RunningText::new(
+            "?#@!$%^^&*()".to_owned(),
+            12,
+            true,
+            &[
+                ("&", "&amp"),
+            ],
+        );
+        assert_text!(
+            text.iter_at(10).rev(),
+            "&amp*()?#@!$%^^",
+            "^&amp*()?#@!$%^",
+            "^^&amp*()?#@!$%",
+            "%^^&amp*()?#@!$",
+            "$%^^&amp*()?#@!",
+            "!$%^^&amp*()?#@",
+            "@!$%^^&amp*()?#",
+            "#@!$%^^&amp*()?",
+            "?#@!$%^^&amp*()",
+            ")?#@!$%^^&amp*(",
+            "()?#@!$%^^&amp*",
+            "*()?#@!$%^^&amp",
+            "&amp*()?#@!$%^^",
+            "^&amp*()?#@!$%^",
+            "^^&amp*()?#@!$%"
         );
         Ok(())
     }
 
     #[test]
     fn without_repeat() -> Result<()> {
-        let mut text = RunningText::new(
-            TextSource::content("a & b".to_owned()),
+        let text = RunningText::new::<&str>(
+            "a & b".to_owned(),
             5,
-            "".to_owned(),
-            "".to_owned(),
-            vec![],
             false,
+            &[],
+        );
+        assert_text!(text.iter(), "a & b", "a & b", "a & b", "a & b");
+        Ok(())
+    }
+
+    #[test]
+    fn without_repeat_backwards() -> Result<()> {
+        let text = RunningText::new::<&str>(
+            "a & b".to_owned(),
+            5,
             false,
-        )?;
-        assert!(text.does_content_fit());
-        assert_text!(text, "a & b", "a & b", "a & b", "a & b");
+            &[],
+        );
+        assert_text!(text.iter().rev(), "a & b", "a & b", "a & b", "a & b");
         Ok(())
     }
 
     #[test]
     fn replacement_without_repeat() -> Result<()> {
-        let mut text = RunningText::new(
-            TextSource::content("a & b".to_owned()),
+        let text = RunningText::new(
+            "a & b".to_owned(),
             5,
-            "|".to_owned(),
-            "".to_owned(),
-            vec![("&".to_owned(), "&amp;".to_owned())],
             false,
+            &[("&", "&amp;")],
+        );
+        assert_text!(text.iter(), "a &amp; b", "a &amp; b", "a &amp; b", "a &amp; b");
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_without_repeat_backwards() -> Result<()> {
+        let text = RunningText::new(
+            "a & b".to_owned(),
+            5,
             false,
-        )?;
-        assert!(text.does_content_fit());
-        assert_text!(text, "a &amp; b", "a &amp; b", "a &amp; b", "a &amp; b");
+            &[("&", "&amp;")],
+        );
+        assert_text!(text.iter().rev(), "a &amp; b", "a &amp; b", "a &amp; b", "a &amp; b");
         Ok(())
     }
 }

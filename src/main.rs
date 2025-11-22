@@ -21,7 +21,7 @@ use text_source::TextSource;
 use crate::{cmd::CmdSource, running_text::{RunIter, RunningText}, text_iter::TextIter};
 
 #[cfg(feature = "mpd")]
-use crate::mpd::{MpdArgToken, MpdSource, MpdSourceArgs};
+use crate::mpd::{mpd_args, MpdArgToken, MpdSource, MpdSourceArgs};
 
 fn parse_key_value_pairs(value: &str) -> anyhow::Result<ArgToken> {
     if value.is_empty() {
@@ -284,64 +284,7 @@ Useful for escaping special characters.")
                 .about("Run text in a terminal")
         );
     #[cfg(feature = "mpd")] 
-    let cli = cli
-        .arg(
-            arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
-            .group("sources")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::Source(SourceToken::Mpd(s.parse()?))))
-            .default_missing_value("127.0.0.0:6600")
-            .action(ArgAction::Append)
-        )
-        .next_help_heading("MPD Options")
-        .arg(
-            arg!(--"status-icons" <ICONS> "Status icons to use")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::StateIcons(s.parse()?)))))
-            .default_value("")
-            .requires("mpd")
-            .action(ArgAction::Append)
-        )
-        .arg(
-            arg!(--"repeat-icons" <ICONS> "Repeat icons to use")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::RepeatIcons(s.parse()?)))))
-            .default_value("")
-            .requires("mpd")
-            .action(ArgAction::Append)
-        )
-        .arg(
-            arg!(--"consume-icons" <ICONS> "Consume icons to use")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::ConsumeIcons(s.parse()?)))))
-            .default_value("")
-            .requires("mpd")
-            .action(ArgAction::Append)
-        ) 
-        .arg(
-            arg!(--"random-icons" <ICONS> "Random icons to use")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::RandomIcons(s.parse()?)))))
-            .default_value("")
-            .requires("mpd")
-            .action(ArgAction::Append)
-        ) 
-        .arg(
-            arg!(--"single-icons" <ICONS> "Single icons to use")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::SingleIcons(s.parse()?)))))
-            .default_value("")
-            .requires("mpd")
-            .action(ArgAction::Append)
-        ) 
-        .arg(
-            arg!(--format <FORMAT> "Format string to use in running text")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::Format(s.parse()?)))))
-            .default_value("{artist} - {title}")
-            .requires("mpd")
-            .action(ArgAction::Append)
-        )
-        .arg(
-            arg!(-D --"default-placeholder" <PLACEHOLDER> "Default placeholder for missing values")
-            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::Placeholder(s.to_owned())))))
-            .default_value("N/A")
-            .requires("mpd")
-            .action(ArgAction::Append)
-        );
+    let cli = mpd_args(cli);
 
     let mut matches = cli.get_matches();
     let mut fragments = text_from_matches(&mut matches)?;

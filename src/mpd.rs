@@ -7,10 +7,71 @@ use chrono::{
     format::{Item, StrftimeItems},
     NaiveTime,
 };
-use clap::builder::{ValueParserFactory};
+use clap::{arg, builder::ValueParserFactory, ArgAction, Command};
 use mpd::{song::QueuePlace, Client, Idle, Song, State, Status, Subsystem};
 
-use crate::{text_source::TextSource, ArgToken, SourceArgToken};
+use crate::{text_source::TextSource, ArgToken, SourceArgToken, SourceToken};
+
+pub fn mpd_args(cli: Command) -> Command {
+    cli
+        .arg(
+            arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
+            .group("sources")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::Source(SourceToken::Mpd(s.parse()?))))
+            .default_missing_value("127.0.0.0:6600")
+            .action(ArgAction::Append)
+        )
+        .next_help_heading("MPD Options")
+        .arg(
+            arg!(--"status-icons" <ICONS> "Status icons to use")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::StateIcons(s.parse()?)))))
+            .default_value("")
+            .requires("mpd")
+            .action(ArgAction::Append)
+        )
+        .arg(
+            arg!(--"repeat-icons" <ICONS> "Repeat icons to use")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::RepeatIcons(s.parse()?)))))
+            .default_value("")
+            .requires("mpd")
+            .action(ArgAction::Append)
+        )
+        .arg(
+            arg!(--"consume-icons" <ICONS> "Consume icons to use")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::ConsumeIcons(s.parse()?)))))
+            .default_value("")
+            .requires("mpd")
+            .action(ArgAction::Append)
+        ) 
+        .arg(
+            arg!(--"random-icons" <ICONS> "Random icons to use")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::RandomIcons(s.parse()?)))))
+            .default_value("")
+            .requires("mpd")
+            .action(ArgAction::Append)
+        ) 
+        .arg(
+            arg!(--"single-icons" <ICONS> "Single icons to use")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::SingleIcons(s.parse()?)))))
+            .default_value("")
+            .requires("mpd")
+            .action(ArgAction::Append)
+        ) 
+        .arg(
+            arg!(--format <FORMAT> "Format string to use in running text")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::Format(s.parse()?)))))
+            .default_value("{artist} - {title}")
+            .requires("mpd")
+            .action(ArgAction::Append)
+        )
+        .arg(
+            arg!(-D --"default-placeholder" <PLACEHOLDER> "Default placeholder for missing values")
+            .value_parser(|s: &str| anyhow::Ok(ArgToken::SourceArg(SourceArgToken::Mpd(MpdArgToken::Placeholder(s.to_owned())))))
+            .default_value("N/A")
+            .requires("mpd")
+            .action(ArgAction::Append)
+        )
+}
 
 // Used for initializing threads for MPD pollers
 static ADDRS: Mutex<BTreeMap<SocketAddr, Arc<Mutex<MpdState>>>> = Mutex::new(BTreeMap::new());

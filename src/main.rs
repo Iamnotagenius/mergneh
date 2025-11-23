@@ -5,6 +5,8 @@ mod text_source;
 mod cmd;
 #[cfg(feature = "mpd")]
 mod mpd;
+#[cfg(feature = "hyprland")]
+mod hyprland_window;
 
 use std::{
     cell::UnsafeCell, collections::BTreeMap, ffi::OsString, fs, io::{self, Write}, thread::sleep, time::Duration
@@ -18,6 +20,8 @@ use clap::{
 };
 use text_source::TextSource;
 
+#[cfg(feature = "hyprland")]
+use crate::hyprland_window::{hyprland_window_args, HyprlandWindowSource};
 use crate::{cmd::CmdSource, running_text::{RunIter, RunningText}, text_iter::TextIter};
 
 #[cfg(feature = "mpd")]
@@ -44,6 +48,8 @@ pub enum SourceToken {
     Stdin,
     #[cfg(feature = "mpd")]
     Mpd(SocketAddr),
+    #[cfg(feature = "hyprland")]
+    HyprlandWindow(String),
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +90,8 @@ where T: Iterator<Item = &'a ArgToken> {
         SourceToken::Stdin => Box::new(io::read_to_string(io::stdin())?),
         #[cfg(feature = "mpd")]
         SourceToken::Mpd(addr) => Box::new(MpdSource::from_args(*addr, _args.mpd)?),
+        #[cfg(feature = "hyprland")]
+        SourceToken::HyprlandWindow(mon) => Box::new(HyprlandWindowSource::new(mon.to_owned())?),
     })
 }
 
@@ -285,6 +293,8 @@ Useful for escaping special characters.")
         );
     #[cfg(feature = "mpd")] 
     let cli = mpd_args(cli);
+    #[cfg(feature = "hyprland")]
+    let cli = hyprland_window_args(cli);
 
     let mut matches = cli.get_matches();
     let mut fragments = text_from_matches(&mut matches)?;
@@ -340,7 +350,6 @@ Useful for escaping special characters.")
                         };
                     }
                 }
-
 
                 sleep(duration);
             }

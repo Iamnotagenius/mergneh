@@ -14,6 +14,7 @@ use crate::{text_source::TextSource, ArgToken, SourceArgToken, SourceToken};
 
 pub fn mpd_args(cli: Command) -> Command {
     cli
+        .next_help_heading("Sources")
         .arg(
             arg!(--mpd [SERVER_ADDR] "Display MPD status as running text [default server address is 127.0.0.0:6600]")
             .group("sources")
